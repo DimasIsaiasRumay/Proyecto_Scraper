@@ -12,8 +12,10 @@ jobs:
       fail-fast: false
       matrix:
         # 3.10 es la versión de referencia en producción; 3.12 detecta
-        # deprecaciones antes de que obliguen a migrar a las apuradas.
-        python-version: ["3.10", "3.12"]
+        # deprecaciones antes de que obliguen a migrar a las apuradas; 3.13 es
+        # el límite superior soportado (fijado por el pin de playwright en
+        # scraper-fabricacion/requirements.txt).
+        python-version: ["3.10", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
