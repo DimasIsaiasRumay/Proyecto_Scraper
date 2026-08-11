@@ -44,13 +44,20 @@ def run_sync(dry_run: bool = False, only_projects: bool = False):
         logger.info("ℹ️  MODO SOLO PROYECTOS: No se sincronizarán tareas/productos")
     logger.info("=" * 70)
 
-    # 1. Inicializar tabla de log en la BD y migrar columnas odoo_id
+    # 1. Verificar que la BD del scraper exista, inicializar la tabla de log
+    #    y migrar columnas odoo_id. Sin la BD no hay nada que sincronizar, así
+    #    que se corta acá con UN mensaje claro en vez de dejar que el error
+    #    se trague en silencio y reaparezca (más confuso, sin contexto) recién
+    #    al intentar leer los proyectos en el paso 3.
     try:
         init_sync_table()
         ensure_odoo_id_columns()
+    except FileNotFoundError as e:
+        logger.error(f"❌ {e}")
+        sys.exit(1)
     except Exception as e:
-        logger.error(f"No se pudo inicializar la BD: {e}")
-        # Continuamos igualmente, el log de archivo seguirá funcionando
+        logger.error(f"❌ No se pudo inicializar la BD: {e}")
+        sys.exit(1)
 
     # 2. Conectar con Odoo
     try:

@@ -7,19 +7,21 @@ de log rotativo como en la tabla odoo_sync_log de la BD del scraper.
 import os
 import sys
 import logging
-import sqlite3
 from datetime import datetime
 from typing import Optional
-from dotenv import load_dotenv
-
-# Cargar .env
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # Módulo de logging compartido con scraper-fabricacion (ver common/logging_utils.py).
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 from common.logging_utils import setup_rotating_logger
+
+# Resolución de ruta y conexión a la BD del scraper: reutilizadas desde
+# database_reader.py (que ya carga el .env y valida que el archivo exista)
+# en vez de duplicarlas acá. Antes este archivo tenía su propia copia de
+# _get_db_path(), que podía desincronizarse silenciosamente de la de
+# database_reader.py si una de las dos cambiaba y la otra no.
+from database_reader import connect_db
 
 # --- Configuración de logging ---
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
@@ -44,27 +46,19 @@ def setup_sync_logger() -> logging.Logger:
 
 # --- Tabla de sincronización en la BD ---
 
-def _get_db_path() -> str:
-    """Obtiene la ruta a la base de datos del scraper."""
-    env_path = os.getenv("DB_PATH", "").strip()
-    if env_path:
-        if not os.path.isabs(env_path):
-            env_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), env_path
-            )
-        return os.path.normpath(env_path)
-    return os.path.normpath(
-        os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..", "scraper-fabricacion", "data", "fabricacion.db"
-        )
-    )
-
-
 def init_sync_table():
-    """Crea la tabla odoo_sync_log si no existe."""
-    db_path = _get_db_path()
-    conn = sqlite3.connect(db_path)
+    """
+    Crea la tabla odoo_sync_log si no existe.
+
+    Requiere que fabricacion.db ya exista (la crea el scraper en su primera
+    corrida). No se crea acá: sqlite3.connect() crea el archivo en silencio
+    si el directorio padre existe, lo que dejaría una fabricacion.db con
+    *solo* la tabla odoo_sync_log y sin el resto del esquema — un error
+    mucho más confuso más adelante ("no such table: proyectos") que este
+    chequeo explícito. connect_db() (database_reader.py) ya valida esto
+    antes de conectar.
+    """
+    conn = connect_db()
     try:
         with conn:
             conn.execute("""
@@ -102,8 +96,7 @@ def log_sync_action(
         producto_nombre: Nombre del producto (None si es el proyecto padre).
         detalle: Mensaje de error o descripción adicional.
     """
-    db_path = _get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = connect_db()
     try:
         with conn:
             conn.execute("""

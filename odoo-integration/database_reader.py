@@ -198,3 +198,12 @@ def get_producto_count() -> int:
         return cursor.fetchone()[0]
     finally:
         conn.close()
+
+
+# --- Alias públicos ---
+# sync_logger.py necesita resolver la misma ruta de BD y abrir la conexión con
+# el mismo chequeo de existencia (antes duplicaba _get_db_path() a mano, lo
+# que permitía que las dos copias se desincronizaran). Se expone acá en vez de
+# mover la lógica, para no reordenar el resto del archivo.
+get_db_path = _get_db_path
+connect_db = _connect
