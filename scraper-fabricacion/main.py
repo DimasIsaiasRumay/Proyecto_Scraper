@@ -1,9 +1,11 @@
 # main.py — Orquestador principal del scraper
 import os
 import sys
+import json
 import argparse
 import logging
 from datetime import datetime
+from typing import Optional
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 import config
@@ -42,29 +44,122 @@ logger = setup_logger()
 
 # --- CONTROL DE LOCK (ANTI-SOLAPAMIENTO) ---
 
+# TTL del lock: las últimas 15 corridas completas (75 proyectos) registradas
+# en la tabla `ejecuciones` tardaron entre ~12 y ~18.5 minutos. 60 minutos da
+# margen amplio (~3-5x el máximo observado) para corridas con más
+# reintentos/backoff de lo habitual, sin dejar que un lock potencialmente
+# huérfano bloquee al bot en silencio por horas (ver caso 2 de acquire_lock).
+LOCK_TTL_MINUTOS = 60
+
+
+def _leer_lock() -> Optional[dict]:
+    """
+    Lee y parsea el archivo de lock. Devuelve None si no existe, está vacío,
+    o tiene un formato no reconocido (lock corrupto, o de una versión previa
+    de este script que solo escribía el PID pelado) — en todos esos casos se
+    trata como huérfano más abajo.
+    """
+    if not os.path.exists(config.LOCK_PATH):
+        return None
+    try:
+        with open(config.LOCK_PATH, "r") as f:
+            data = json.loads(f.read().strip())
+        if not isinstance(data, dict) or "pid" not in data or "started_at" not in data:
+            return None
+        return data
+    except (json.JSONDecodeError, ValueError, OSError):
+        return None
+
+
+def _proceso_vivo(pid: int) -> bool:
+    """
+    True si el PID corresponde a un proceso vivo (de cualquier usuario).
+
+    os.kill(pid, 0) NO mata al proceso: solo lo comprueba (verificado
+    empíricamente en Windows, Python 3.10 y 3.14 antes de aplicar este
+    cambio — no dispara TerminateProcess). PermissionError (subclase de
+    OSError) significa que el proceso SÍ existe pero pertenece a otro
+    usuario: se trata como vivo, a diferencia de ProcessLookupError/OSError
+    genérico (no existe), que antes se manejaban juntos y podían borrar el
+    lock de un proceso que en realidad seguía corriendo.
+    """
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def acquire_lock():
-    """Crea un archivo de lock para asegurar exclusión mutua."""
-    if os.path.exists(config.LOCK_PATH):
+    """
+    Crea un archivo de lock para asegurar exclusión mutua.
+
+    El lock guarda PID + timestamp de inicio (no solo el PID pelado, como
+    antes) para distinguir tres casos:
+
+      1. PID vivo y dentro del TTL: otra instancia legítima está
+         corriendo. Log INFO/WARNING y sys.exit(0) — comportamiento
+         normal, no es un error.
+      2. PID vivo pero fuera del TTL: instancia colgada, o el PID fue
+         reciclado por Windows hacia un proceso sin ninguna relación con
+         el scraper — os.kill(pid, 0) da "vivo" para CUALQUIER proceso,
+         no solo el nuestro. Sin este chequeo, este caso dejaba al bot
+         sin correr indefinidamente y en absoluto silencio: el
+         Programador de Tareas ve sys.exit(0) y lo registra como éxito.
+         Se trata como anómalo: log ERROR y sys.exit(1), para que quede
+         visible en vez de perderse.
+      3. PID muerto, o lock corrupto/ilegible: huérfano de una corrida
+         anterior que no se limpió (p. ej. corte eléctrico). Se borra y
+         se continúa con normalidad.
+    """
+    lock = _leer_lock()
+
+    if lock is not None:
+        pid = lock["pid"]
+        edad_minutos = None
         try:
-            with open(config.LOCK_PATH, "r") as f:
-                pid = f.read().strip()
-            
-            # Comprobar si el proceso del lock sigue activo en el sistema
-            # En Windows os.kill(pid, 0) lanza un ProcessLookupError si no existe
-            os.kill(int(pid), 0)
-            logger.warning(f"Otra instancia del scraper ya se está ejecutando (PID: {pid}). Saliendo.")
-            sys.exit(0)
-        except (OSError, ValueError):
-            # Proceso no existe, eliminar lock huérfano
-            logger.info("Eliminando archivo de lock huérfano de una corrida anterior...")
+            started_at = datetime.fromisoformat(lock["started_at"])
+            edad_minutos = (datetime.now() - started_at).total_seconds() / 60
+        except (ValueError, TypeError):
+            pass  # timestamp ilegible: se trata como antigüedad desconocida (caso 2)
+
+        if _proceso_vivo(pid):
+            if edad_minutos is not None and edad_minutos <= LOCK_TTL_MINUTOS:
+                logger.warning(
+                    f"Otra instancia del scraper ya se está ejecutando "
+                    f"(PID: {pid}, iniciada hace {edad_minutos:.0f} min). Saliendo."
+                )
+                sys.exit(0)
+            else:
+                detalle_edad = (
+                    "de antigüedad desconocida (timestamp ilegible)" if edad_minutos is None
+                    else f"con {edad_minutos:.0f} min de antigüedad (supera el TTL de {LOCK_TTL_MINUTOS} min)"
+                )
+                logger.error(
+                    f"⚠️  Lock activo con PID {pid} vivo pero {detalle_edad}. Puede "
+                    f"ser una instancia colgada, o el PID fue reciclado por Windows "
+                    f"hacia otro proceso sin relación con el scraper. Revisar "
+                    f"manualmente antes de borrar {config.LOCK_PATH}."
+                )
+                sys.exit(1)
+        else:
+            logger.info(
+                f"Eliminando archivo de lock huérfano de una corrida anterior "
+                f"(PID {pid} ya no existe)..."
+            )
             try:
                 os.remove(config.LOCK_PATH)
             except Exception:
                 pass
-                
-    # Crear nuevo lock con el PID actual
+
+    # Crear nuevo lock con el PID actual y el timestamp de inicio
     with open(config.LOCK_PATH, "w") as f:
-        f.write(str(os.getpid()))
+        json.dump(
+            {"pid": os.getpid(), "started_at": datetime.now().isoformat(), "script": "main.py"},
+            f,
+        )
 
 def release_lock():
     """Elimina el archivo de lock al finalizar la ejecución."""
