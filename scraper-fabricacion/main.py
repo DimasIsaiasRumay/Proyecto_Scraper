@@ -233,25 +233,32 @@ def main():
     mensaje_error = None
 
     try:
-        # 5. Iniciar Playwright con argumentos antidetect (Stealth)
+        # 5. Iniciar Playwright con un perfil de navegador estándar. El ERP
+        # está pensado para navegación manual, no para un cliente HTTP: el
+        # flag AutomationControlled y navigator.webdriver por defecto de
+        # Playwright hacen que algunos flujos de carga del ERP se comporten
+        # distinto a como lo harían con un operador real (ver también §5 del
+        # README).
         with sync_playwright() as p:
             logger.info("Iniciando navegador Chromium...")
             browser = p.chromium.launch(
                 headless=config.HEADLESS,
                 args=[
-                    "--disable-blink-features=AutomationControlled", # Desactivar flag webdriver
+                    "--disable-blink-features=AutomationControlled", # Evita quedar marcado como controlado por automatizacion
                     "--no-sandbox",
                     "--disable-setuid-sandbox"
                 ]
             )
-            
+
             # Contexto con Viewport Desktop grande y User-Agent real
             context = browser.new_context(
                 viewport={"width": 1920, "height": 1080},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
-            
-            # Ocultar webdriver en javascript de las páginas
+
+            # Emular un navegador de escritorio estándar (navigator.webdriver
+            # sin el valor que expone Playwright por defecto), por el mismo
+            # motivo que el flag de arriba.
             context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             
             page = context.new_page()

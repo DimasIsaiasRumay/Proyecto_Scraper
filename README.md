@@ -19,7 +19,11 @@ Incluye: checkpoints de reanudación ante fallos, reintentos con backoff exponen
 
 Este sistema automatiza la extracción de datos desde la plataforma de gestión interna de la empresa (**ERP web propietario**, en adelante "el ERP") y sincroniza la información de fabricación y logística directamente con **Odoo v19.0** a través de su API JSON-2.
 
-El principal objetivo es eliminar la transcripción manual de datos, garantizando una base de datos centralizada y actualizada con el estado real de la fabricación de estructuras (por ejemplo, bandejas solares, brazos de izaje, etc.).
+### Por qué existe este bot
+
+El ERP no ofrece una API ni acceso directo a su base de datos: la única vía que el desarrollador del sistema podía dar para una consulta masiva de datos era armar a mano un CSV con toda la información de proyectos y materiales, bajo pedido. En el día a día, esto se traducía en exportar manualmente planillas XLSX de proyectos y listas de materiales cada vez que alguien las necesitaba — un trabajo repetitivo, que quedaba desactualizado en cuanto el ERP cambiaba de estado, y que dejaba los datos en manos de quien hizo la exportación puntual en vez de disponibles para el resto del equipo.
+
+El principal objetivo de este sistema es eliminar esa carga: automatizar la extracción para que los datos queden centralizados y actualizados en una base de datos relacional (`fabricacion.db`), disponibles para cualquiera que los necesite sin depender de una descarga manual, y en un formato que habilita el análisis posterior de consumo de materiales por producto — algo que las planillas sueltas no permitían hacer de forma sistemática.
 
 ### Desafíos Técnicos Resueltos:
 *   **Navegación no agresiva:** El scraper simula el ritmo de un operador humano (pausas aleatorias, tipeo con delay) para no saturar el ERP ni disparar sus límites de tasa.
@@ -260,7 +264,7 @@ Cuando se realiza una nueva extracción de datos, el bot compara el valor actual
 
 ---
 
-## 5. BOT SCRAPER DE FABRICACIÓN (STEALTH PLAYWRIGHT)
+## 5. BOT SCRAPER DE FABRICACIÓN (NAVEGACIÓN AUTOMATIZADA CON PLAYWRIGHT)
 
 Este módulo es responsable del ingreso y raspado de datos de la aplicación del ERP.
 
@@ -301,11 +305,12 @@ flowchart TD
 1.  **Exclusión Mutua (Lock):**  
     El script crea un archivo temporal `scraper.lock` que contiene el identificador de proceso (PID). Si se intenta iniciar el bot mientras hay otra instancia ejecutándose, se valida si el proceso está activo y, en caso positivo, la nueva instancia termina inmediatamente para evitar colisiones.
 
-2.  **Navegación no agresiva:**
-    *   **Automation flag:** Se deshabilita la propiedad de Playwright que le indica al navegador web que está siendo controlado por automatización (`navigator.webdriver = false`).
+2.  **Navegación no agresiva (compatibilidad con el ERP):**  
+    El ERP está construido para que lo use una persona con un navegador de escritorio, no un cliente HTTP — su JS espera los eventos y el timing de una sesión manual. Estos puntos existen para que el bot se comporte de esa forma, no para ocultarse de nadie:
+    *   **Perfil de navegador estándar:** Se lanza Chromium con las mismas señales que un Chrome de escritorio (`navigator.webdriver` sin el valor por defecto que expone Playwright). Sin esto, algunos flujos de carga del ERP se comportan de forma distinta a como lo harían con un operador real.
     *   **User-Agent Real:** Se inyecta una cabecera de agente de usuario de un navegador Chrome corriendo en Windows 10 real.
-    *   **Simulación de Escritura:** En lugar de rellenar los inputs instantáneamente, el bot hace clic sobre los inputs y escribe el texto carácter por carácter con un retardo aleatorio de entre 50 y 150 ms por tecla.
-    *   **Demoras Humanas (Jitter):** Retardos aleatorios configurables de entre 1.5 y 3.5 segundos tras cada acción importante (como un clic en un selector o un cambio de pestaña).
+    *   **Simulación de Escritura:** En lugar de rellenar los inputs instantáneamente, el bot hace clic sobre los inputs y escribe el texto carácter por carácter con un retardo aleatorio de entre 50 y 150 ms por tecla, para disparar los mismos eventos de teclado que espera el formulario del ERP.
+    *   **Demoras Humanas (Jitter):** Retardos aleatorios configurables de entre 1.5 y 3.5 segundos tras cada acción importante (como un clic en un selector o un cambio de pestaña), para no saturar el ERP con peticiones a un ritmo que un uso manual normal nunca alcanzaría.
     *   **Restricción Horaria:** Restringe la ejecución automática exclusivamente a dos rangos clave de tráfico habitual en la oficina: **06:11 a 07:22** y **16:00 a 17:00**.
 
 3.  **Gestión de Sesión e Inicio Compartido:**  
@@ -329,7 +334,7 @@ flowchart TD
 
 ## 6. SINCRONIZADOR CON ODOO (JSON-RPC 2.0)
 
-Este módulo lee los datos guardados en SQLite por el bot y los sincroniza con la API nativa de Odoo v19.0.
+Odoo es donde se lleva el registro de los materiales que entran y salen de la fábrica, asociados a los proyectos de fabricación en curso. Para poder asociar cada material al proyecto correspondiente, Odoo necesita saber qué proyectos existen y en qué estado están — y ahí es donde se conecta con el resto de este sistema: este módulo lee los proyectos y productos que el bot ya extrajo del ERP y guardó en SQLite, y los sincroniza con Odoo (creando o actualizando `project.project` y `project.task`) para que la carga de fabricación quede reflejada del lado de Odoo sin tener que cargarla a mano.
 
 ### Flujo de Ejecución del Sincronizador
 

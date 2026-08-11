@@ -25,7 +25,9 @@ async def test():
     print("Credenciales cargadas desde .env (URL y usuario no se muestran).")
 
     async with async_playwright() as p:
-        # Modo stealth y user agent
+        # User-Agent de un Chrome de escritorio real: el ERP está pensado
+        # para navegación manual y algunos flujos se comportan distinto si
+        # detectan un cliente HTTP genérico en vez de un navegador estándar.
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
