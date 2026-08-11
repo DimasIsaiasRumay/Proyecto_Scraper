@@ -1,1 +1,8 @@
 pytest>=7.0.0
+# tests/test_odoo_builders.py importa sync_projects.py/sync_tasks.py, que a su
+# vez importan odoo_client.py (requests) y cargan .env (python-dotenv) al nivel
+# de módulo. Sin estas dos deps, pytest ni siquiera llega a recolectar ese
+# archivo: falla con ModuleNotFoundError antes de correr un solo test. Se
+# referencian desde el módulo en vez de duplicarlas a mano, para que no se
+# desincronicen si algún día cambian ahí.
+-r odoo-integration/requirements.txt

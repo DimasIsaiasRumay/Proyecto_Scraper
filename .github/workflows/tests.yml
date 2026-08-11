@@ -23,10 +23,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Instalar dependencias
-        # Solo las de desarrollo: la suite no toca el ERP ni Odoo, así que no
-        # hace falta Playwright ni sus navegadores (que son el grueso del tiempo
-        # de instalación). Si algún día un test importa scraper.py o config.py,
-        # este job va a fallar — que es exactamente la señal que se busca.
+        # requirements-dev.txt incluye las deps de odoo-integration/ (requests,
+        # python-dotenv): test_odoo_builders.py importa sync_projects/sync_tasks,
+        # que las arrastran al nivel de módulo. Playwright NO está: no hace
+        # falta ni el navegador (que es el grueso del tiempo de instalación),
+        # porque la suite no toca el ERP. Si algún día un test importa
+        # scraper.py o config.py, este job va a fallar — que es exactamente la
+        # señal que se busca.
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
