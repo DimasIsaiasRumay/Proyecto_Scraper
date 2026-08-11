@@ -309,7 +309,7 @@ flowchart TD
     *   **Restricción Horaria:** Restringe la ejecución automática exclusivamente a dos rangos clave de tráfico habitual en la oficina: **06:11 a 07:22** y **16:00 a 17:00**.
 
 3.  **Gestión de Sesión e Inicio Compartido:**  
-    Dado que el usuario `design` es compartido por 4 operarios, la plataforma web puede expulsar la sesión activa del bot. Para manejar esto:
+    Dado que la cuenta de diseño es compartida por 4 operarios, la plataforma web puede expulsar la sesión activa del bot. Para manejar esto:
     *   El bot ejecuta `check_session_and_relogin(page)` antes de procesar cada proyecto. Si es expulsado, realiza la re-autenticación de inmediato sin romper el ciclo de procesamiento.
 
 4.  **Tolerancia a Fallos (Checkpoints y Reintentos):**
