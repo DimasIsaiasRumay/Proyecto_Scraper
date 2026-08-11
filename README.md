@@ -11,7 +11,7 @@ Incluye: checkpoints de reanudación ante fallos, reintentos con backoff exponen
 > **Fecha de Actualización:** 11 de agosto de 2026
 > **Versión:** 2.1
 > **Estado del Sistema:** Operativo e Integrado
-> **Tecnologías:** Python 3.10, Playwright, SQLite3, Odoo API (JSON-RPC 2.0), pytest
+> **Tecnologías:** Python 3.10–3.13, Playwright, SQLite3, Odoo API (JSON-RPC 2.0), pytest
 
 ---
 
@@ -105,11 +105,12 @@ Proyecto Scraper/
 │
 ├── docs/historial/                  # Notas de proceso del desarrollo original (checklist, migración de esquema, diagrama de BD)
 │
-├── .github/workflows/tests.yml      # CI: corre pytest en Python 3.10 y 3.12 (sin .env ni navegador)
+├── .github/workflows/tests.yml      # CI: corre pytest en Python 3.10, 3.12 y 3.13 (sin .env ni navegador)
 ├── LICENSE                          # MIT
-├── requirements-dev.txt             # Dependencias de desarrollo (pytest)
+├── requirements-dev.txt             # Dependencias de desarrollo: pytest + las de odoo-integration/ (requests, python-dotenv), que test_odoo_builders.py arrastra al importar sync_projects/sync_tasks
 ├── pytest.ini                       # Configuración de pytest (testpaths = tests)
-├── .gitignore                       # Excluye credenciales, .env, *.db, logs y datos locales del control de versiones
+├── .gitignore                       # Excluye credenciales (.env, secrets.*, *.pem, etc.), *.db, logs y datos locales del control de versiones
+├── .gitattributes                   # Normaliza finales de línea (CRLF para .bat/.cmd, LF para el resto) entre distintos SO
 └── README.md                        # Este archivo
 ```
 
@@ -439,6 +440,19 @@ Durante el ciclo de desarrollo actual se ejecutaron las siguientes mejoras mayor
 
 8.  **Credenciales del scraper migradas a `.env` (`config.py`):** el archivo `credenciales.txt` (formato de texto plano casero, parseado línea por línea) se reemplazó por `scraper-fabricacion/.env` (`SET_IN_URL`, `SET_IN_USERNAME`, `SET_IN_PASSWORD`), cargado con `python-dotenv` — el mismo mecanismo que ya usaba `odoo-integration/`, así ambos módulos manejan secretos de la misma forma en vez de tener dos convenciones distintas. La migración se hizo con un script que leyó el archivo viejo y escribió el `.env` directamente, sin que los valores reales pasaran por ningún log ni salida visible. Se mantiene el mismo comportamiento de fallo explícito (`ConfigError`) si faltan datos.
 
+9.  **Cuarta pasada (11 de agosto de 2026) — auditoría de seguridad y clonación previa a la publicación del repositorio:**  
+    Antes de publicar el repositorio se hizo una auditoría dedicada a dos preguntas: qué credenciales podían quedar expuestas, y qué le pasaría a alguien que clonara el repo desde cero. La auditoría encontró el repositorio limpio de secretos versionados (ninguna credencial real en el historial), pero varios problemas de reproducibilidad y algunos detalles de exposición menores. Cambios aplicados:
+    *   **CI roto en el primer push, corregido:** `requirements-dev.txt` solo traía `pytest`, pero `tests/test_odoo_builders.py` importa `sync_projects.py`, que arrastra `requests` y `python-dotenv` al nivel de módulo. El CI moría en la recolección de tests (`ModuleNotFoundError`, exit 2) sin correr ninguno de los 38 tests. Ahora `requirements-dev.txt` referencia `odoo-integration/requirements.txt` con `-r`.
+    *   **Pin de Playwright desactualizado:** `1.44.0` (mayo 2024) arrastraba `greenlet==3.0.3`, sin wheel binario para Python ≥3.13 — instalaba compilando desde fuente en Windows. Se subió a `1.62.0` (`greenlet` 3.5.5, con wheel para 3.10–3.13) y se validó con una prueba de humo real contra el ERP de producción (3 proyectos, sin `--sync`, sobre una copia aislada de la BD).
+    *   **Orden de errores en `odoo_sync.py`:** en un clon limpio (sin `fabricacion.db` porque `data/` está gitignored), `--dry-run` fallaba en silencio al crear la tabla de log, seguía de largo, y volvía a fallar 20 líneas después con un segundo mensaje para la misma causa. Ahora corta con un solo mensaje claro. De paso se eliminó una copia duplicada de la resolución de ruta de la BD (`_get_db_path()`, repetida en `sync_logger.py` y `database_reader.py`).
+    *   **Validación de credenciales de Odoo en `--dry-run`:** `--dry-run` sin `.env` corría igual sin avisar de la falta de configuración (el mismo antipatrón de fallo silencioso que ya se había corregido en `config.py`). Ahora valida siempre, y solo se saltea en dry-run la verificación de conectividad real contra el servidor.
+    *   **Nombres de proyecto hardcodeados rotos por la anonimización:** `test_db_history.py` y `test_scrape_suministros.py` (`scripts/manual_exploration/`) tenían un nombre de proyecto de ejemplo que quedó desactualizado. En `test_db_history.py` esto hacía que el `UPDATE` de prueba afectara 0 filas en silencio y el script igual imprimiera el historial preexistente como si hubiera verificado algo. Ambos scripts ahora resuelven el proyecto desde la BD local (o por `--proyecto` explícito) y `test_db_history.py` aborta si el `UPDATE` no afecta ninguna fila.
+    *   **Lock del scraper con TTL:** `acquire_lock()` guardaba solo el PID pelado; si Windows reciclaba ese PID hacia un proceso sin relación con el scraper, `main.py` concluía "ya hay otra instancia" y salía con código 0 — éxito para el Programador de Tareas — dejando al bot sin correr en absoluto silencio. Ahora el lock guarda PID + timestamp de inicio, con un TTL de 60 minutos (basado en que las corridas completas reales tardan entre 12 y 18.5 minutos) para distinguir un solapamiento legítimo de una instancia colgada o un PID reciclado.
+    *   **`.gitattributes` nuevo:** normaliza finales de línea (CRLF para `.bat`/`.cmd`, LF para el resto), para que los lanzadores no queden con LF en un clon con `core.autocrlf=false`.
+    *   **`.gitignore` ampliado:** mismo principio que las reglas de `.env` (amplias, no atadas a un nombre exacto) aplicado a otros nombres de archivo de secretos que hoy no existen en el repo pero podrían introducirse sin pensar (`credenciales.*`, `secrets.*`, certificados, claves SSH, `.netrc`) y a respaldos/volcados de datos (`*.db.bak`, `backup/`, `export/`).
+    *   **Exposición de credenciales en `scripts/manual_exploration/`:** el README exponía el usuario compartido del ERP (`design`) en texto plano; `test_login.py` imprimía URL y usuario por stdout. Ambos corregidos.
+    *   **Lenguaje "stealth" reencuadrado:** el título de §5 y varios comentarios describían la compatibilidad de navegador del bot (deshabilitar `navigator.webdriver`, User-Agent real, tipeo con delay) en términos de evasión. El código no cambió — es lo que un ERP pensado para navegación manual necesita para tratar al bot igual que a un operador humano —, pero la descripción sí, para reflejar el propósito real: automatizar una extracción que antes se hacía a mano vía planillas XLSX (el ERP no tiene API ni acceso a su BD).
+
 ---
 
 ## 8. GUÍA DE OPERACIÓN Y MANTENIMIENTO
@@ -447,7 +461,7 @@ Durante el ciclo de desarrollo actual se ejecutaron las siguientes mejoras mayor
 
 Para configurar la máquina local o servidor que ejecute los bots:
 
-1.  Asegurar instalación de Python 3.10+. En Windows, los lanzadores `.bat` usan `py -3.10` si el launcher lo tiene disponible, y si no caen automáticamente al `python` del PATH (o del entorno virtual activo).
+1.  Asegurar instalación de Python 3.10–3.13 (rango soportado por el pin de Playwright en `scraper-fabricacion/requirements.txt`). En Windows, los lanzadores `.bat` usan `py -3.10` si el launcher lo tiene disponible, y si no caen automáticamente al `python` del PATH (o del entorno virtual activo).
 2.  Instalar dependencias:
     *   Para el Scraper (incluye lo necesario para invocar la sincronización con Odoo en el mismo proceso): `pip install -r scraper-fabricacion/requirements.txt`
     *   Para correr el sincronizador de Odoo de forma standalone: `pip install -r odoo-integration/requirements.txt`
@@ -485,6 +499,8 @@ pytest
 La suite (`tests/`) corre en menos de un segundo y no hace ninguna llamada al ERP ni a Odoo — valida las funciones puras de parseo (`parse_date`, `parse_float`), la validación de los dataclasses, y el armado de los payloads que se envían a Odoo.
 
 **No requiere `.env` ni navegador instalado:** corre tal cual en un clon recién hecho y en CI. Las funciones de parseo viven en `scraper-fabricacion/parsing.py`, que solo depende de la stdlib, justamente para que importarlas no arrastre `config.py` (que lee el `.env` en tiempo de import y aborta la colección de pytest si falta).
+
+`requirements-dev.txt` incluye además las dependencias de `odoo-integration/` (`requests`, `python-dotenv`): `tests/test_odoo_builders.py` importa `sync_projects.py`/`sync_tasks.py`, que a su vez importan `odoo_client.py` y cargan `.env` con `python-dotenv` al nivel de módulo — sin esas dos deps, pytest falla en la recolección (`ModuleNotFoundError`) antes de correr un solo test. Playwright sigue **fuera** de `requirements-dev.txt` a propósito: no hace falta el navegador para esta suite.
 
 ### Configuración del Programador de Tareas de Windows
 
