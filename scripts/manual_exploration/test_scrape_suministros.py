@@ -6,7 +6,9 @@ de un suministro de un proyecto específico — útil para verificar los
 patrones de selector (#suministro_cant_{id}, etc.) usados en scraper.py
 cuando el ERP cambia algo. No lo ejecute pytest/CI automáticamente.
 """
+import argparse
 import os
+import sqlite3
 import sys
 import asyncio
 from playwright.async_api import async_playwright
@@ -14,7 +16,37 @@ from playwright.async_api import async_playwright
 sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scraper-fabricacion")))
 import config
 
-async def main():
+
+def elegir_proyecto_por_defecto() -> str:
+    """
+    Toma el proyecto sincronizado más recientemente de la BD local del
+    scraper, en vez de depender de un nombre de proyecto hardcodeado en el
+    código (que queda desactualizado en cuanto ese proyecto puntual deja de
+    existir o se renombra en el ERP — la búsqueda simplemente no encuentra
+    filas, sin ningún aviso de que el nombre ya no es válido).
+    """
+    db_path = os.path.join(config.BASE_DIR, "data", "fabricacion.db")
+    if not os.path.exists(db_path):
+        raise RuntimeError(
+            f"BD no encontrada en {db_path}. Corré el scraper al menos una "
+            f"vez antes de usar este script, o pasá un proyecto explícito "
+            f"con --proyecto."
+        )
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT nombre FROM proyectos ORDER BY fecha_ultima_sync DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise RuntimeError(
+            "La tabla 'proyectos' está vacía. Pasá un proyecto explícito con --proyecto."
+        )
+    return row[0]
+
+
+async def main(proyecto_nombre: str):
     print("Iniciando Playwright...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -37,12 +69,19 @@ async def main():
             await page.goto(config.URL_MATERIALES, timeout=config.TIMEOUT_NAV)
             await page.wait_for_selector("#nombre", timeout=config.TIMEOUT_ELEMENT)
 
-            # Buscar el proyecto (ajustar este nombre si hace falta explorar otro proyecto)
-            proyecto_nombre = "OP_CLIENTE_A_BANDEJA SOLAR_0403260846"
             print(f"Buscando proyecto: {proyecto_nombre}")
             await page.fill("#nombre", proyecto_nombre)
             await page.click("#find")
-            await page.wait_for_selector("#tablaTree tbody tr", timeout=config.TIMEOUT_ELEMENT)
+            try:
+                await page.wait_for_selector("#tablaTree tbody tr", timeout=config.TIMEOUT_ELEMENT)
+            except Exception:
+                print(
+                    f"No se encontraron filas para '{proyecto_nombre}'. Si el "
+                    f"nombre vino de la BD local (--proyecto no especificado), "
+                    f"puede que ya no exista en el ERP o que su estado esté "
+                    f"filtrado en esta pantalla. Probá con --proyecto \"OTRO_NOMBRE\"."
+                )
+                return
 
             # Clicar en Visualizar Detalle
             preview_btn = page.locator("img[title='Visualizar Detalle']").first
@@ -81,4 +120,21 @@ async def main():
             await browser.close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--proyecto", default=None,
+        help="Nombre exacto del proyecto a explorar. Si se omite, se toma el "
+             "sincronizado más recientemente de la BD local.",
+    )
+    args = parser.parse_args()
+
+    if args.proyecto:
+        _proyecto = args.proyecto
+    else:
+        try:
+            _proyecto = elegir_proyecto_por_defecto()
+        except RuntimeError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+    asyncio.run(main(_proyecto))
