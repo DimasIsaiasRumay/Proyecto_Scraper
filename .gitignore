@@ -6,12 +6,33 @@
 .env
 .env.*
 !.env.example
-credenciales.txt
+# Mismo principio de reglas amplias: nombres de archivo de secretos que hoy
+# no existen en el repo, pero que un futuro módulo o script suelto podría
+# introducir sin que nadie piense en agregarlos acá a mano. credenciales.*
+# reemplaza a la regla vieja (solo credenciales.txt), que ya cubre.
+credenciales.*
+secrets.*
+*.pem
+*.pfx
+*.p12
+id_rsa*
+.netrc
+token.txt
+tokens.txt
 
 # Bases de datos locales
 *.db
 *.db-journal
+*.sqlite
+*.sqlite3
 scraper-fabricacion/data/
+
+# Volcados y respaldos de datos: contienen nombres de clientes reales
+# (proyectos, materiales) igual que la BD y los logs de arriba.
+*.db.bak
+*.dump
+backup/
+export/
 
 # Logs
 logs/
