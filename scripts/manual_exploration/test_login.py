@@ -18,8 +18,11 @@ import config
 
 async def test():
     print("Iniciando prueba de conexión con Playwright...")
-    print(f"URL: {config.URL_LOGIN}")
-    print(f"Usuario: {config.USERNAME}")
+    # No se imprimen URL_LOGIN ni USERNAME: son las credenciales del .env
+    # local. Si esta salida se pega en un issue o un chat, no debe filtrar
+    # nada — a diferencia de los otros scripts de esta carpeta, este es el
+    # único que llegó a imprimirlas.
+    print("Credenciales cargadas desde .env (URL y usuario no se muestran).")
 
     async with async_playwright() as p:
         # Modo stealth y user agent
