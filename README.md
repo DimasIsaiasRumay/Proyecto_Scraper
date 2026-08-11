@@ -519,7 +519,8 @@ Cuando ocurran incidentes, verificar las siguientes fuentes en orden:
 
 Publicado bajo licencia MIT — ver [LICENSE](LICENSE).
 
-Los nombres de la empresa, de los clientes y el host del ERP fueron
-anonimizados en esta documentación (`CLIENTE_A`, `CLIENTE_B`, …). Las
+Los nombres de los clientes y el host del ERP fueron anonimizados en esta
+documentación (`CLIENTE_A`, `CLIENTE_B`, …). El nombre de la empresa (SET IN)
+se mantiene a propósito: forma parte del trabajo actual del autor. Las
 credenciales se leen exclusivamente de archivos `.env` locales, excluidos del
 control de versiones; no hay ninguna en el código ni en el historial del repo.
