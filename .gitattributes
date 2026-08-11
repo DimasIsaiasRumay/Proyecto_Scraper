@@ -1,0 +1,19 @@
+# .gitattributes — normaliza finales de línea al clonar en distintos SO.
+#
+# Sin este archivo, un .bat versionado con LF (posible si alguien clona con
+# core.autocrlf=false) puede comportarse de forma inconsistente en cmd.exe.
+# Ver docs/historial/ para el contexto de esta corrección.
+
+* text=auto eol=lf
+
+# Lanzadores de Windows: cmd.exe espera CRLF de forma consistente.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Datos binarios: nunca deben pasar por conversión de fin de línea.
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+
+# JSON de datos/configuración: LF fijo para diffs estables entre plataformas.
+*.json text eol=lf
