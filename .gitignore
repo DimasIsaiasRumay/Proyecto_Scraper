@@ -1,0 +1,33 @@
+# Credenciales
+# Reglas globales a propósito (no atadas a una carpeta puntual): antes eran
+# "scraper-fabricacion/.env" y "odoo-integration/.env", así que un .env en la
+# raíz, en un módulo nuevo, o un backup tipo .env.bak NO quedaban excluidos y
+# se podían subir sin aviso con un `git add -A`.
+.env
+.env.*
+!.env.example
+credenciales.txt
+
+# Bases de datos locales
+*.db
+*.db-journal
+scraper-fabricacion/data/
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Locks y checkpoints en ejecución
+scraper.lock
+
+# Herramientas locales / configuración de editor, no forman parte del proyecto
+.claude/
+.obsidian/
+.vscode/
+.idea/

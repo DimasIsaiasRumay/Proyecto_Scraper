@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 es la versión de referencia en producción; 3.12 detecta
+        # deprecaciones antes de que obliguen a migrar a las apuradas.
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Instalar dependencias
+        # Solo las de desarrollo: la suite no toca el ERP ni Odoo, así que no
+        # hace falta Playwright ni sus navegadores (que son el grueso del tiempo
+        # de instalación). Si algún día un test importa scraper.py o config.py,
+        # este job va a fallar — que es exactamente la señal que se busca.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Ejecutar tests
+        # Sin .env: la suite debe correr en un clon limpio.
+        run: pytest -q

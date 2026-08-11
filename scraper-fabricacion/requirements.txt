@@ -1,0 +1,6 @@
+playwright==1.44.0
+# A partir de la unificación con odoo-integration (main.py importa odoo_sync
+# directamente para poder ejecutar scraping + sync con --sync en un solo proceso),
+# estas dependencias del módulo odoo-integration también son necesarias aquí:
+requests>=2.31.0
+python-dotenv>=1.0.0
