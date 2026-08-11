@@ -60,8 +60,16 @@ def run_sync(dry_run: bool = False, only_projects: bool = False):
         sys.exit(1)
 
     # 2. Conectar con Odoo
+    # OdooClient() sin allow_unconfigured valida SIEMPRE que ODOO_URL,
+    # ODOO_DATABASE y ODOO_API_KEY estén presentes — también en --dry-run.
+    # Antes se pasaba allow_unconfigured=dry_run, que desactivaba justo esa
+    # validación cuando dry-run estaba activo: un --dry-run sin .env no
+    # avisaba de nada y seguía de largo simulando una corrida imposible
+    # (logueaba "Conectando a Odoo (N/A)..." sin más contexto). Lo que sí se
+    # salta en dry-run es solo la verificación de CONECTIVIDAD (test_connection,
+    # que golpea el servidor real) — eso no tiene sentido simularlo.
     try:
-        client = OdooClient(allow_unconfigured=dry_run)
+        client = OdooClient()
         logger.info(f"📡 Conectando a Odoo ({client.url or 'N/A'})...")
 
         if not dry_run:
@@ -71,7 +79,7 @@ def run_sync(dry_run: bool = False, only_projects: bool = False):
                 logger.error("❌ No se pudo conectar con Odoo. Verifica las credenciales en .env")
                 sys.exit(1)
         else:
-            logger.info("📡 [DRY-RUN] Se omite la verificación de conexión con Odoo.")
+            logger.info("📡 [DRY-RUN] Se omite la verificación de conexión con Odoo (config ya validada).")
 
     except OdooClientError as e:
         logger.error(f"❌ Error de configuración de Odoo: {e}")
