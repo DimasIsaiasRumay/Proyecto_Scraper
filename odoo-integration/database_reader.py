@@ -1,7 +1,7 @@
-# database_reader.py — Lectura y escritura de odoo_id en la BD SQLite del scraper
+# database_reader.py — Lectura y escritura de datos en la BD SQLite del scraper
 """
-Lee proyectos y productos de fabricacion.db para enviarlos a Odoo.
-También escribe de vuelta los odoo_id obtenidos tras la sincronización.
+Lee proyectos de fabricacion.db filtrados por corrida para enviarlos a Odoo.
+También escribe de vuelta los odoo_location_id obtenidos tras la sincronización.
 """
 
 import os
@@ -50,8 +50,9 @@ def _connect() -> sqlite3.Connection:
 
 def ensure_odoo_id_columns():
     """
-    Agrega las columnas odoo_id a las tablas proyectos y proyecto_productos
-    si aún no existen. Es seguro llamar múltiples veces (idempotente).
+    Agrega las columnas odoo_id y odoo_location_id a la tabla proyectos
+    (y odoo_id a proyecto_productos) si aún no existen.
+    Es seguro llamar múltiples veces (idempotente).
     No afecta al scraper ya que usa columnas explícitas en sus queries.
     """
     conn = _connect()
@@ -77,83 +78,69 @@ def ensure_odoo_id_columns():
         conn.close()
 
 
-# --- Lectura ---
+# --- Selección de proyectos por corrida ---
 
-def get_all_projects() -> List[Dict]:
-    """
-    Lee todos los proyectos de la tabla 'proyectos'.
-    Retorna una lista de dicts con claves: nombre, cliente, estado, odoo_id.
-    """
+def get_ultima_ejecucion_valida() -> Optional[Dict]:
+    """Última corrida terminada y con proyectos procesados.
+    Retorna {"id": int, "timestamp_inicio": str} o None si no hay ninguna."""
     conn = _connect()
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT nombre, cliente, estado, fecha_primera_carga, fecha_ultima_sync, odoo_id
-            FROM proyectos
-            ORDER BY nombre
+            SELECT id, timestamp_inicio FROM ejecuciones
+            WHERE timestamp_fin IS NOT NULL AND proyectos_procesados > 0
+            ORDER BY id DESC LIMIT 1
         """)
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {"id": row["id"], "timestamp_inicio": row["timestamp_inicio"]}
     finally:
         conn.close()
 
 
-def get_productos(proyecto_nombre: str) -> List[Dict]:
-    """
-    Lee todos los productos de un proyecto específico.
-    Retorna una lista de dicts con claves: nombre, cantidad, solicitud,
-    entrega_fc, entrega, estado, odoo_id.
-    """
+def get_ejecucion_inicio(ejecucion_id: int) -> Optional[str]:
+    """timestamp_inicio de una corrida puntual. None si el id no existe.
+    Sin filtro de timestamp_fin para soportar corridas en progreso llamadas desde el bot."""
+    conn = _connect()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT timestamp_inicio FROM ejecuciones WHERE id = ?", (ejecucion_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return row["timestamp_inicio"]
+    finally:
+        conn.close()
+
+
+def get_projects_desde(timestamp_inicio: str) -> List[ProyectoLocal]:
+    """Lee los proyectos modificados a partir de timestamp_inicio ordenados por nombre."""
     conn = _connect()
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT nombre, cantidad, solicitud, entrega_fc, entrega, estado, odoo_id
-            FROM proyecto_productos
-            WHERE proyecto_nombre = ?
+            SELECT nombre, cliente, estado, odoo_id, odoo_location_id
+            FROM proyectos
+            WHERE fecha_ultima_sync >= ?
             ORDER BY nombre
-        """, (proyecto_nombre,))
+        """, (timestamp_inicio,))
         rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        resultado = []
+        for row in rows:
+            try:
+                resultado.append(ProyectoLocal.from_row(dict(row)))
+            except ValueError:
+                continue
+        return resultado
     finally:
         conn.close()
 
 
-def get_all_projects_with_productos() -> List[Dict]:
-    """
-    Lee todos los proyectos junto con sus productos.
-    Retorna una lista de dicts donde cada proyecto incluye una clave 'productos'
-    con la lista de sus productos. Se mantiene el formato dict (no ProyectoLocal)
-    para no romper el resumen/conteo de odoo_sync.py que itera sobre esto antes
-    de tipar cada proyecto individualmente con get_all_projects_typed().
-    """
-    projects = get_all_projects()
-    for project in projects:
-        project["productos"] = get_productos(project["nombre"])
-    return projects
-
-
-def get_all_projects_typed() -> List[ProyectoLocal]:
-    """
-    Igual que get_all_projects_with_productos(), pero devuelve objetos
-    ProyectoLocal/ProductoLocal tipados en vez de dicts sueltos — así un
-    typo en un nombre de campo se detecta al construir el objeto, no
-    recién cuando sync_projects.py/sync_tasks.py intentan leerlo.
-    """
-    proyectos_dict = get_all_projects_with_productos()
-    resultado = []
-    for p in proyectos_dict:
-        try:
-            resultado.append(ProyectoLocal.from_row(p))
-        except ValueError:
-            continue  # proyecto sin nombre; ya se logueó en ProyectoLocal.from_row
-    return resultado
-
-
-# --- Escritura de odoo_id ---
+# --- Escritura de IDs ---
 
 def save_project_odoo_id(proyecto_nombre: str, odoo_id: int):
-    """Guarda el ID de Odoo para un proyecto en la BD local."""
+    """Guarda el ID de Odoo (project.project histórico) para un proyecto en la BD local."""
     conn = _connect()
     try:
         with conn:
@@ -178,19 +165,6 @@ def save_project_location_id(proyecto_nombre: str, location_id: int) -> None:
         conn.close()
 
 
-def save_producto_odoo_id(proyecto_nombre: str, producto_nombre: str, odoo_id: int):
-    """Guarda el ID de Odoo para un producto en la BD local."""
-    conn = _connect()
-    try:
-        with conn:
-            conn.execute(
-                "UPDATE proyecto_productos SET odoo_id = ? WHERE proyecto_nombre = ? AND nombre = ?",
-                (odoo_id, proyecto_nombre, producto_nombre)
-            )
-    finally:
-        conn.close()
-
-
 # --- Contadores ---
 
 def get_project_count() -> int:
@@ -199,17 +173,6 @@ def get_project_count() -> int:
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM proyectos")
-        return cursor.fetchone()[0]
-    finally:
-        conn.close()
-
-
-def get_producto_count() -> int:
-    """Retorna la cantidad total de productos en la BD."""
-    conn = _connect()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM proyecto_productos")
         return cursor.fetchone()[0]
     finally:
         conn.close()
