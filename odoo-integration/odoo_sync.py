@@ -77,7 +77,11 @@ def run_sync(
     # 2. Conectar con Odoo
     try:
         client = OdooClient()
-        logger.info(f"📡 Conectando a Odoo ({client.url or 'N/A'})...")
+        # No se imprime client.url: es la URL del Odoo de producción (decisión 8
+        # del plan, ver docs/plan_stock_locations.md) — no es tan sensible como
+        # la API key, pero un pantallazo del log pegado en un chat/issue no
+        # debería filtrar ni eso.
+        logger.info("📡 Conectando a Odoo...")
 
         if not dry_run:
             if client.test_connection():
