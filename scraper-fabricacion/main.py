@@ -413,7 +413,8 @@ def main():
             else:
                 logger.info("Iniciando sincronización con Odoo (--sync activado)...")
                 try:
-                    sync_exit_code = run_odoo_sync(dry_run=False, only_projects=False)
+                    # Se pasa ejecucion_id explícito porque en este punto la corrida en curso todavía no tiene timestamp_fin (se cierra en el finally posterior).
+                    sync_exit_code = run_odoo_sync(dry_run=False, ejecucion_id=ejecucion_id)
                     if not sync_exit_code:
                         logger.info("✅ Sincronización con Odoo completada exitosamente.")
                     else:
