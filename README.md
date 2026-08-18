@@ -2,14 +2,14 @@
 
 Sistema de automatización que extrae datos de proyectos de fabricación, productos y materiales/logística desde un ERP interno web (Playwright, con simulación de navegación humana), los persiste en SQLite con historial completo de cambios de estado, y los sincroniza con **Odoo v19.0** vía su API JSON-RPC 2.0 — todo en una sola ejecución.
 
-Incluye: checkpoints de reanudación ante fallos, reintentos con backoff exponencial que distinguen errores transitorios (red/ERP lento) de permanentes (cambios de estructura del ERP), validación de datos en los modelos, y una suite de tests unitarios (pytest) para las funciones de parseo y los payloads enviados a Odoo.
+Incluye: checkpoints de reanudación ante fallos, reintentos con backoff exponencial que distinguen errores transitorios (red/ERP lento) de permanentes (cambios de estructura del ERP), validación de datos en los modelos, y una suite de tests unitarios (pytest) para las funciones de parseo, selección de proyectos por corrida y payloads enviados a Odoo.
 
 > Este proyecto es la etapa de extracción del pipeline: alimenta con datos limpios y estructurados un análisis posterior de consumo de materiales por producto.
 
 ## MANUAL DE DOCUMENTACIÓN TÉCNICA Y FUNCIONAL
 ### SISTEMA DE EXTRACCIÓN Y SINCRONIZACIÓN (ERP DE FABRICACIÓN)
-> **Fecha de Actualización:** 11 de agosto de 2026
-> **Versión:** 2.1
+> **Fecha de Actualización:** 18 de agosto de 2026
+> **Versión:** 3.0
 > **Estado del Sistema:** Operativo e Integrado
 > **Tecnologías:** Python 3.10–3.13, Playwright, SQLite3, Odoo API (JSON-RPC 2.0), pytest
 
@@ -30,6 +30,7 @@ El principal objetivo de este sistema es eliminar esa carga: automatizar la extr
 *   **Concurrencia de Usuarios:** Soporte para inicios de sesión simultáneos de la cuenta compartida por múltiples operarios de diseño.
 *   **Resiliencia y Tolerancia a Fallos:** Capacidad de retomar ejecuciones interrumpidas en el último proyecto procesado mediante un sistema de checkpoints.
 *   **Estructura Jerárquica:** Migración de una tabla plana a un modelo relacional de 3 niveles (*Proyecto → Producto → Item*).
+*   **Sincronización por corrida con Odoo:** Creación de ubicaciones virtuales de producción (`stock.location`) para los proyectos procesados en la corrida activa.
 
 ---
 
@@ -41,12 +42,13 @@ El sistema se compone de dos módulos principales que interactúan a través de 
 graph TD
     A[Portal del ERP] <-->|Playwright| B(Bot Scraper)
     B -->|Persiste datos y transiciones| C[(Base de Datos SQLite: fabricacion.db)]
-    C <-->|Lectura de Datos y Guardado de IDs| D(Sincronizador Odoo)
-    D <-->|JSON-RPC 2.0 API| E[Servidor Odoo v19.0]
+    C -->|Selección de proyectos por corrida| D(Sincronizador Odoo)
+    D <-->|JSON-RPC 2.0 API: stock.location| E[Servidor Odoo v19.0]
+    D -->|Guarda odoo_location_id y log| C
 ```
 
 1.  **Bot Scraper (`scraper-fabricacion/`):** Utiliza Playwright en modo síncrono para navegar, loguearse, extraer la jerarquía de proyectos y materiales, y almacenar todo en SQLite.
-2.  **Sincronizador Odoo (`odoo-integration/`):** Lee los datos consolidados en SQLite y realiza operaciones de creación/actualización en Odoo para emparejar la estructura de proyectos y tareas locales con los de la nube.
+2.  **Sincronizador Odoo (`odoo-integration/`):** Lee los proyectos procesados en la última corrida del bot desde SQLite y crea ubicaciones virtuales de producción (`stock.location` con `usage='production'`) bajo la ubicación padre `Production` en Odoo v19.0.
 
 ---
 
@@ -77,48 +79,53 @@ Proyecto Scraper/
 │   │   └── materiales_productos.json       # Salida de extraer_materiales_presupuesto.py
 │   └── logs/scraper.log                    # Log rotativo (max 5MB, 3 backups)
 │
-├── odoo-integration/                # MÓDULO DE SINCRONIZACIÓN CON ODOO
-│   ├── odoo_sync.py                 # Orquestador de la sincronización (también invocable como módulo)
-│   ├── odoo_client.py               # Cliente HTTP para API JSON-2 de Odoo, con retry/backoff en fallos transitorios
-│   ├── odoo_models.py               # Dataclasses tipadas (ProyectoLocal/ProductoLocal) para los payloads a Odoo
-│   ├── database_reader.py           # Lectura/escritura de la BD SQLite del scraper
-│   ├── sync_projects.py             # Sincronización del modelo project.project
-│   ├── sync_tasks.py                # Sincronización del modelo project.task (Productos locales)
-│   ├── sync_logger.py               # Logging (usa common/logging_utils.py) + tabla SQLite odoo_sync_log
-│   ├── run_sync.bat                 # Lanzador de sincronización standalone (sin re-scrapear)
-│   ├── requirements.txt             # Dependencias (requests, python-dotenv)
-│   ├── .env                         # Credenciales de la API de Odoo (excluido de git)
-│   ├── .env.example                 # Plantilla de .env sin datos reales
-│   └── logs/odoo_sync.log           # Log rotativo (max 5MB, 3 backups)
+├── odoo-integration/                       # MÓDULO DE SINCRONIZACIÓN CON ODOO
+│   ├── odoo_sync.py                        # Orquestador de la sincronización (también invocable como módulo)
+│   ├── odoo_client.py                      # Cliente HTTP para API JSON-2 de Odoo, con retry/backoff en fallos transitorios
+│   ├── odoo_models.py                      # Dataclass tipada (ProyectoLocal) para los datos a Odoo
+│   ├── database_reader.py                  # Lectura/escritura de la BD SQLite del scraper filtrada por corrida
+│   ├── sync_locations.py                   # Creación y verificación de stock.location bajo Production
+│   ├── sync_logger.py                      # Logging (usa common/logging_utils.py) + tabla SQLite odoo_sync_log
+│   ├── run_sync.bat                        # Lanzador de sincronización standalone (sin re-scrapear)
+│   ├── requirements.txt                    # Dependencias (requests, python-dotenv)
+│   ├── .env                                # Credenciales de la API de Odoo (excluido de git)
+│   ├── .env.example                        # Plantilla de .env sin datos reales
+│   └── logs/odoo_sync.log                  # Log rotativo (max 5MB, 3 backups)
 │
-├── common/                          # Utilidades compartidas entre ambos módulos
-│   └── logging_utils.py             # Factory única de logging (RotatingFileHandler + consola UTF-8)
+├── common/                                 # Utilidades compartidas entre ambos módulos
+│   └── logging_utils.py                    # Factory única de logging (RotatingFileHandler + consola UTF-8)
 │
-├── scripts/manual_exploration/      # Scripts de exploración manual contra el ERP en vivo
-│                                     # (NO son un test suite automatizado; no los ejecuta pytest)
+├── scripts/manual_exploration/             # Scripts de exploración manual contra el ERP u Odoo en vivo
+│   ├── explorar_ubicaciones_odoo.py        # Exploración en solo lectura de stock.location en Odoo en vivo
+│   └── test_login.py                       # Verificación manual de login en el ERP
 │
-├── tests/                           # Suite de tests unitarios (pytest) — no tocan el ERP ni Odoo
-│   ├── conftest.py                  # Registra ambos módulos en sys.path para los tests
-│   ├── test_parsing.py              # parse_date / parse_float (importa parsing.py: no requiere .env)
-│   ├── test_models.py               # Validación __post_init__ de los dataclasses del scraper
-│   └── test_odoo_builders.py        # ProyectoLocal/ProductoLocal y armado de payloads a Odoo
+├── tests/                                  # Suite de tests unitarios (pytest) — no tocan el ERP ni Odoo
+│   ├── conftest.py                         # Registra ambos módulos en sys.path para los tests
+│   ├── test_parsing.py                     # parse_date / parse_float (importa parsing.py: no requiere .env)
+│   ├── test_models.py                      # Validación __post_init__ de los dataclasses del scraper
+│   ├── test_odoo_locations.py              # Saneo de nombres, armado de payloads y lógica de sync_locations
+│   └── test_run_selection.py               # Selección de proyectos por corrida en database_reader
 │
-├── docs/historial/                  # Notas de proceso del desarrollo original (checklist, migración de esquema, diagrama de BD)
+├── docs/                                   # Planes de ejecución y reportes técnicos
+│   ├── plan_stock_locations.md             # Plan de ejecución detallado de ubicaciones de producción
+│   ├── fase1_recon_ubicaciones.md          # Reporte crudo de reconocimiento en Odoo
+│   ├── reporte_antigravity_01.md           # Reporte de cierre de iteración
+│   └── historial/                          # Notas de proceso del desarrollo original
 │
-├── .github/workflows/tests.yml      # CI: corre pytest en Python 3.10, 3.12 y 3.13 (sin .env ni navegador)
-├── LICENSE                          # MIT
-├── requirements-dev.txt             # Dependencias de desarrollo: pytest + las de odoo-integration/ (requests, python-dotenv), que test_odoo_builders.py arrastra al importar sync_projects/sync_tasks
-├── pytest.ini                       # Configuración de pytest (testpaths = tests)
-├── .gitignore                       # Excluye credenciales (.env, secrets.*, *.pem, etc.), *.db, logs y datos locales del control de versiones
-├── .gitattributes                   # Normaliza finales de línea (CRLF para .bat/.cmd, LF para el resto) entre distintos SO
-└── README.md                        # Este archivo
+├── .github/workflows/tests.yml             # CI: corre pytest en Python 3.10, 3.12 y 3.13 (sin .env ni red)
+├── LICENSE                                 # MIT
+├── requirements-dev.txt                    # Dependencias de desarrollo (pytest, requests, python-dotenv)
+├── pytest.ini                              # Configuración de pytest (testpaths = tests)
+├── .gitignore                              # Excluye credenciales, *.db, logs y datos locales
+├── .gitattributes                          # Normaliza finales de línea entre distintos SO
+└── README.md                               # Este archivo
 ```
 
 ---
 
 ## 4. MODELO DE DATOS Y ESQUEMA DE BASE DE DATOS
 
-La persistencia local se realiza mediante una base de datos SQLite ubicada en `scraper-fabricacion/data/fabricacion.db`. A continuación, se detalla la estructura lógica de las 11 tablas del sistema:
+La persistencia local se realiza mediante una base de datos SQLite ubicada en `scraper-fabricacion/data/fabricacion.db`. A continuación, se detalla la estructura lógica de las tablas del sistema:
 
 ### Diagrama de Entidad-Relación (ER)
 
@@ -142,6 +149,7 @@ erDiagram
         datetime fecha_primera_carga
         datetime fecha_ultima_sync
         integer odoo_id
+        integer odoo_location_id
     }
     proyecto_productos {
         integer id PK
@@ -199,7 +207,8 @@ erDiagram
 *   `estado` (TEXT): Estado global del proyecto en el ERP.
 *   `fecha_primera_carga` (DATETIME): Timestamp del primer scraping.
 *   `fecha_ultima_sync` (DATETIME): Timestamp de la última vez que fue leído del web.
-*   `odoo_id` (INTEGER, NULL): Identificador único de este proyecto en Odoo (`project.project`).
+*   `odoo_id` (INTEGER, NULL): Identificador histórico en Odoo (`project.project`).
+*   `odoo_location_id` (INTEGER, NULL): Identificador único de la ubicación de producción de este proyecto en Odoo (`stock.location`).
 
 #### `proyecto_productos` (Nivel 2)
 *   `id` (INTEGER, PK, AUTOINCREMENT)
@@ -212,7 +221,7 @@ erDiagram
 *   `estado` (TEXT): Estado actual del producto (Ej: `En Pintura`, `En Soldadura`).
 *   `fecha_primera_carga` (DATETIME)
 *   `fecha_ultima_sync` (DATETIME)
-*   `odoo_id` (INTEGER, NULL): ID de la tarea asignada en Odoo (`project.task`).
+*   `odoo_id` (INTEGER, NULL): ID histórico de la tarea asignada en Odoo (`project.task`).
 *   *Restricción:* Único `(proyecto_nombre, nombre)`.
 
 #### `producto_items` (Nivel 3)
@@ -304,154 +313,120 @@ flowchart TD
 ### Funcionalidades y Mecanismos Críticos:
 
 1.  **Exclusión Mutua (Lock):**  
-    El script crea un archivo temporal `scraper.lock` que contiene el identificador de proceso (PID). Si se intenta iniciar el bot mientras hay otra instancia ejecutándose, se valida si el proceso está activo y, en caso positivo, la nueva instancia termina inmediatamente para evitar colisiones.
+    El script crea un archivo temporal `scraper.lock` que contiene el identificador de proceso (PID) y timestamp con TTL de 60 minutos. Si se intenta iniciar el bot mientras hay otra instancia ejecutándose, la nueva instancia termina inmediatamente para evitar colisiones.
 
 2.  **Navegación no agresiva (compatibilidad con el ERP):**  
-    El ERP está construido para que lo use una persona con un navegador de escritorio, no un cliente HTTP — su JS espera los eventos y el timing de una sesión manual. Estos puntos existen para que el bot se comporte de esa forma, no para ocultarse de nadie:
-    *   **Perfil de navegador estándar:** Se lanza Chromium con las mismas señales que un Chrome de escritorio (`navigator.webdriver` sin el valor por defecto que expone Playwright). Sin esto, algunos flujos de carga del ERP se comportan de forma distinta a como lo harían con un operador real.
-    *   **User-Agent Real:** Se inyecta una cabecera de agente de usuario de un navegador Chrome corriendo en Windows 10 real.
-    *   **Simulación de Escritura:** En lugar de rellenar los inputs instantáneamente, el bot hace clic sobre los inputs y escribe el texto carácter por carácter con un retardo aleatorio de entre 50 y 150 ms por tecla, para disparar los mismos eventos de teclado que espera el formulario del ERP.
-    *   **Demoras Humanas (Jitter):** Retardos aleatorios configurables de entre 1.5 y 3.5 segundos tras cada acción importante (como un clic en un selector o un cambio de pestaña), para no saturar el ERP con peticiones a un ritmo que un uso manual normal nunca alcanzaría.
-    *   **Restricción Horaria:** Restringe la ejecución automática exclusivamente a dos rangos clave de tráfico habitual en la oficina: **06:11 a 07:22** y **16:00 a 17:00**.
+    El ERP está construido para que lo use una persona con un navegador de escritorio, no un cliente HTTP — su JS espera los eventos y el timing de una sesión manual:
+    *   **Perfil de navegador estándar:** Se lanza Chromium con las mismas señales que un Chrome de escritorio (`navigator.webdriver` sin el valor por defecto que expone Playwright).
+    *   **User-Agent Real:** Cabecera de agente de usuario de Chrome en Windows 10.
+    *   **Simulación de Escritura:** Clic sobre inputs y tipeo con delay de 50 a 150 ms por tecla.
+    *   **Demoras Humanas (Jitter):** Retardos aleatorios de 1.5 a 3.5 segundos tras cada acción importante.
+    *   **Restricción Horaria:** Ejecución automática en rangos: **06:11 a 07:22** y **16:00 a 17:00**.
 
 3.  **Gestión de Sesión e Inicio Compartido:**  
-    Dado que la cuenta de diseño es compartida por 4 operarios, la plataforma web puede expulsar la sesión activa del bot. Para manejar esto:
-    *   El bot ejecuta `check_session_and_relogin(page)` antes de procesar cada proyecto. Si es expulsado, realiza la re-autenticación de inmediato sin romper el ciclo de procesamiento.
+    Dado que la cuenta de diseño es compartida, el bot ejecuta `check_session_and_relogin(page)` antes de procesar cada proyecto. Si es expulsado, realiza la re-autenticación de inmediato sin romper el ciclo.
 
 4.  **Tolerancia a Fallos (Checkpoints y Reintentos):**
-    *   El procesamiento de cada proyecto tiene un máximo de **3 reintentos**, pero **solo ante errores transitorios** (`PlaywrightTimeoutError`: red lenta, sesión caída, ERP tardando en responder), con **backoff exponencial real** (~5s, ~10s, ~20s entre intentos). Un error que no sea un timeout (p. ej. un selector roto por un cambio de estructura en el ERP) se trata como **permanente**: se loguea de inmediato con traceback completo y no se reintenta, para no desperdiciar minutos reintentando algo que va a fallar siempre igual.
-    *   Si los 3 intentos transitorios fallan (o el error fue permanente), se almacena la traza del error en la tabla `proyectos_errores`, se actualiza el checkpoint local y el bot continúa con el siguiente proyecto (de este modo, un solo proyecto dañado no frena todo el lote).
-    *   Si más del 20% de los proyectos de una corrida terminan fallidos, se emite una alerta `ERROR` distintiva en el log (`TASA DE FALLO ELEVADA`) para que un patrón estructural (no fallas puntuales) sea visible de inmediato, no enterrado entre cientos de líneas de log.
-    *   Un caso especial ya no cuenta como fallo: si la búsqueda de materiales de un proyecto no devuelve ninguna fila, se asume que el proyecto no tiene datos de logística cargados en el ERP (comportamiento verificado en vivo) y se continúa sin reintentar ni marcar el proyecto como fallido.
-    *   Tras cada proyecto procesado con éxito, se escribe la fila de checkpoint. Si el proceso se apaga abruptamente (p. ej. por corte eléctrico), al reiniciarse leerá la tabla `checkpoint` y omitirá los proyectos que ya se procesaron.
+    *   Máximo de **3 reintentos** ante errores transitorios (`PlaywrightTimeoutError`), con **backoff exponencial** (~5s, ~10s, ~20s). Errores permanentes se loguean con traceback completo y no se reintentan.
+    *   Fila de checkpoint tras cada proyecto procesado exitosamente para reanudar ante apagados abruptos.
 
 5.  **Herramienta complementaria — Materiales por Producto (`extraer_materiales_presupuesto.py`):**  
-    La extracción principal (`extraer_materiales`) trae los materiales de un **proyecto completo**, sin discriminar a qué producto pertenece cada uno. Este script secundario resuelve esa limitación: navega a la sección de **Presupuesto** del ERP, que sí desglosa los materiales **por producto** — y además trae las **dimensiones de cada pieza** (largo, ancho, cantidad) que la extracción principal no captura.
-    *   Requiere que el scraper principal ya haya corrido al menos una vez (cruza los productos vía la tabla `proyecto_productos` de la BD local).
-    *   Guarda los resultados en la tabla `proyecto_producto_materiales` de SQLite y también en `data/materiales_productos.json` (útil para consumir desde un notebook de análisis sin tocar la BD).
-    *   Se ejecuta de forma independiente y manual (no forma parte de `run_bot.bat`): `run_budget_materials.bat`, o `python extraer_materiales_presupuesto.py`.
+    Desglosa materiales por producto y captura dimensiones de cada pieza desde la sección Presupuesto del ERP.
 
 ---
 
 ## 6. SINCRONIZADOR CON ODOO (JSON-RPC 2.0)
 
-Odoo es donde se lleva el registro de los materiales que entran y salen de la fábrica, asociados a los proyectos de fabricación en curso. Para poder asociar cada material al proyecto correspondiente, Odoo necesita saber qué proyectos existen y en qué estado están — y ahí es donde se conecta con el resto de este sistema: este módulo lee los proyectos y productos que el bot ya extrajo del ERP y guardó en SQLite, y los sincroniza con Odoo (creando o actualizando `project.project` y `project.task`) para que la carga de fabricación quede reflejada del lado de Odoo sin tener que cargarla a mano.
+Odoo es donde se lleva el inventario y los movimientos de materiales asociados a la fabricación. Para asociar el stock y los consumos a cada proyecto de fabricación, Odoo utiliza **ubicaciones virtuales de producción** (`stock.location` con `usage='production'`), organizadas como hijas de la ubicación raíz `Production`.
+
+Este módulo lee los proyectos que el bot procesó en su última corrida (o una corrida puntual con `--ejecucion-id`) desde la base de datos SQLite y sincroniza cada proyecto con Odoo, creando la ubicación correspondiente bajo `Production`.
 
 ### Flujo de Ejecución del Sincronizador
 
 ```mermaid
 flowchart TD
     Start([Inicio]) --> Connect[Conectar a API de Odoo /json/2/]
-    Connect --> ConnTest{¿Conexión Exitosa?}
-    ConnTest -- No --> LogErr[Registrar Error en Consola/Log] --> End([Fin])
-    ConnTest -- Sí --> ReadDb[Leer Proyectos y Productos en SQLite]
-    ReadDb --> LoopProj{¿Quedan Proyectos?}
+    Connect --> ConnTest{¿Modo dry-run?}
+    ConnTest -- No --> TestConn[Verificar conectividad]
+    TestConn -- Falla --> LogErr[Error de conexión] --> Exit1([Salir código 1])
+    TestConn -- OK --> ResolveRun[Resolver corrida SQLite]
+    ConnTest -- Sí --> ResolveRun
     
-    LoopProj -- No --> Summary[Imprimir Resumen de Operación] --> End
-    LoopProj -- Sí --> Proj[Procesar Proyecto]
+    ResolveRun --> Parent[Resolver ubicación padre 'Production']
+    Parent -- No resuelto / Ambiguo --> LogParentErr[Error padre Production] --> Exit1
+    Parent -- OK --> ReadProj[Leer proyectos de la corrida]
+    ReadProj --> HasProj{¿Hay proyectos?}
+    HasProj -- No --> LogEmpty[Aviso: 0 proyectos] --> Exit0([Salir código 0])
+    HasProj -- Sí --> LoopProj{¿Quedan proyectos?}
     
-    Proj --> SearchProj{¿Existe odoo_id en local?}
-    SearchProj -- Sí --> VerifyProj[Verificar ID en Odoo]
-    SearchProj -- No --> SearchNameProj[Buscar por nombre en Odoo]
+    LoopProj -- No --> Summary[Resumen final] --> ExitCode{¿Hubo errores?}
+    ExitCode -- Sí --> Exit2([Salir código 2])
+    ExitCode -- No --> Exit0
     
-    VerifyProj & SearchNameProj --> ProjFound{¿Encontrado?}
-    ProjFound -- Sí --> UpdateProj[Actualizar Proyecto en Odoo] --> SyncTasks
-    ProjFound -- No --> CreateProj[Crear Proyecto en Odoo] --> SaveProjId[Guardar odoo_id en SQLite] --> SyncTasks
+    LoopProj -- Sí --> Sanitize[Saneamiento de nombre: '/' -> '-']
+    Sanitize --> SearchParent{¿Existe bajo Production?}
+    SearchParent -- Sí: 1 coincidencia --> CheckState{¿Estado/usage válidos?}
+    CheckState -- Sí --> NoChange[Acción: sin_cambios] --> SaveLocId[Guardar odoo_location_id local] --> LoopProj
+    CheckState -- No: archivada / otro usage --> WarnParent[Acción: aviso] --> SaveLocId --> LoopProj
+    SearchParent -- Sí: 2+ coincidencias --> WarnDup[Acción: aviso - duplicado] --> LoopProj
     
-    SyncTasks --> LoopTasks{¿Quedan Productos en este Proyecto?}
-    LoopTasks -- No --> LoopProj
-    LoopTasks -- Sí --> Prod[Procesar Producto como Tarea]
-    
-    Prod --> SearchTask{¿Existe odoo_id en local?}
-    SearchTask -- Sí --> VerifyTask[Verificar ID Tarea en Odoo]
-    SearchTask -- No --> SearchNameTask[Buscar por nombre + project_id]
-    
-    VerifyTask & SearchNameTask --> TaskFound{¿Encontrada?}
-    TaskFound -- Sí --> UpdateTask[Actualizar Tarea en Odoo] --> LoopTasks
-    TaskFound -- No --> CreateTask[Crear Tarea en Odoo] --> SaveTaskId[Guardar odoo_id de Tarea en SQLite] --> LoopTasks
+    SearchParent -- No --> SearchGlobal{¿Existe fuera de Production?}
+    SearchGlobal -- Sí --> WarnGlobal[Acción: aviso - existe fuera] --> LoopProj
+    SearchGlobal -- No --> DryCheck{¿dry-run?}
+    DryCheck -- Sí --> DryLog[Acción: created simulado] --> LoopProj
+    DryCheck -- No --> CreateLoc[Crear stock.location en Odoo] --> SaveLocId2[Guardar odoo_location_id y log en SQLite] --> LoopProj
 ```
 
 ### Componentes y Protocolos del Sincronizador:
 
 1.  **API JSON-2 Client (`odoo_client.py`):**  
-    Odoo v19 utiliza un endpoint REST con formato JSON-RPC 2.0. Las peticiones se dirigen a `POST /json/2/<modelo>/<metodo>`.
-    *   **Cabeceras:** Requiere cabecera de autenticación `Authorization: bearer <API_KEY>` y cabecera de base de datos `X-Odoo-Database: <BD_NAME>`.
-    *   **Mapeos Implementados:**
-        *   `search`: Retorna los IDs coincidentes con un dominio.
-        *   `search_read`: Retorna los campos solicitados de las entidades.
-        *   `create`: Registra datos enviando una lista de diccionarios.
-        *   `write`: Modifica registros pasando sus IDs de Odoo y el payload correspondiente.
+    Odoo v19 utiliza un endpoint con formato JSON-RPC 2.0 (`POST /json/2/<modelo>/<metodo>`).
+    *   **Cabeceras:** `Authorization: bearer <API_KEY>` y `X-Odoo-Database: <BD_NAME>`.
+    *   **Mapeos Implementados:** `search_read`, `create`, `write`, `fields_get`.
 
-2.  **Sincronización de Proyectos (`sync_projects.py`):**
-    *   Mapea proyectos de SQLite al modelo `project.project` de Odoo.
-    *   El campo `name` se asocia con el nombre de proyecto local. El campo `description` en Odoo se compone combinando la información de `cliente` y `estado` actuales (Ej: `Cliente: CLIENTE_A | Estado: Material OK`).
-    *   El sistema escribe el ID asignado por Odoo de vuelta en la columna `odoo_id` de la tabla `proyectos` local.
+2.  **Resolución de la Ubicación Padre (`sync_locations.py`):**
+    *   Intenta resolver la ubicación raíz de producción primero por XML ID (`stock.location_production` / `stock.stock_location_production`).
+    *   Fallback por nombre y atributos (`usage='production'`, `location_id=False`, `active=True`).
+    *   Valida defensivamente que el registro no sea una sub-ubicación propia (rechaza candidatos cuyo padre sea `Production`).
+    *   Si el resultado es ambiguo (>1 candidato) o no se encuentra, aborta la corrida completa con código 1.
 
-3.  **Sincronización de Tareas (`sync_tasks.py`):**
-    *   Mapea los **Productos** locales (Nivel 2 de la base de datos) como Tareas (`project.task`) dentro del proyecto Odoo correspondiente.
-    *   *Nota de Diseño:* Los **Items** (Nivel 3) se ignoran intencionalmente en la sincronización de Odoo para evitar saturación de registros.
-    *   La descripción de la tarea en Odoo recopila el estado del producto, la cantidad y las fechas de solicitud/entrega FC.
-    *   La **fecha de entrega** real se mapea al campo `date_deadline` (fecha de vencimiento de la tarea) en Odoo.
-    *   El sistema escribe el ID asignado por Odoo de vuelta en la columna `odoo_id` de la tabla `proyecto_productos` local.
+3.  **Saneamiento y Búsqueda Defensiva (`sync_locations.py`):**
+    *   `sanitize_location_name()`: Reemplaza `/` por `-` y recorta espacios de los bordes. Se utiliza **la misma función** tanto al buscar como al crear, evitando duplicaciones.
+    *   Busca primero bajo el padre `Production`. Si no existe, realiza una búsqueda global para advertir si el nombre ya existe en otra rama del árbol de inventario.
+    *   Acciones posibles: `created`, `sin_cambios`, `aviso`, `error`.
+    *   En caso de `aviso` (ubicación archivada o con otro usage), no modifica el registro en Odoo.
 
-4.  **Logging Dual de Sincronización (`sync_logger.py`):**
-    *   Genera logs legibles en `odoo-integration/logs/odoo_sync.log`.
-    *   Persiste de manera estructurada en SQLite dentro de la tabla `odoo_sync_log` las acciones realizadas (`created`, `updated`, `skipped`, `error`) junto con el modelo, ID Odoo y descripción detallada del cambio para auditoría rápida en software de visualización de base de datos.
+4.  **Logging Dual y Códigos de Salida:**
+    *   Registra en consola y en `odoo-integration/logs/odoo_sync.log`.
+    *   Persiste acciones reales en la tabla `odoo_sync_log` de SQLite (`odoo_model='stock.location'`).
+    *   Códigos de salida de `run_sync()`:
+        *   `0`: Ejecución exitosa sin errores.
+        *   `1`: Error fatal (credenciales, base de datos, corrida no encontrada o padre `Production` no resuelto).
+        *   `2`: Completado con errores por proyecto.
 
 ---
 
 ## 7. MIGRACIONES Y CAMBIOS IMPLEMENTADOS RECIENTES
 
-Durante el ciclo de desarrollo actual se ejecutaron las siguientes mejoras mayores:
+Durante el ciclo de desarrollo se ejecutaron las siguientes mejoras mayores:
 
-1.  **Migración de 2 a 3 Niveles en el Scraper y BD:**
-    *   *Anteriormente:* La estructura se componía únicamente por *Proyecto* y una tabla plana de *Subitems*.
-    *   *Ahora:* Se normalizó la base de datos dividiendo subitems en dos entidades relacionales: `proyecto_productos` (Nivel 2) y `producto_items` (Nivel 3).
-    *   El scraper analiza los atributos de árbol HTML (`data-tt-id` y `data-tt-parent-id`) para trazar la estructura exacta del árbol en la página de proyectos.
-2.  **Creación de Tablas de Historial de Estados:**  
-    Se separó el historial plano en `productos_historial_estados` e `items_historial_estados` para evitar mezclar datos.
-3.  **Sincronización de Productos en Odoo:**  
-    Se adaptó el sincronizador para crear tareas sólo a nivel de Producto (`proyecto_productos`), omitiendo la creación de miles de ítems secundarios repetitivos en Odoo.
-4.  **Limpieza Automatizada de Tareas Antiguas:**  
-    Se diseñó y ejecutó un script de limpieza para vaciar las tareas huérfanas en Odoo de forma masiva en lotes de a 100 registros para evitar sobrecargar la pasarela API del servidor.
-
-5.  **Revisión de código (11 de agosto de 2026) — hallazgos y correcciones aplicadas:**  
-    Se realizó una revisión completa del scraper y el sincronizador siguiendo el checklist estándar (reintentos, autenticación, selectores, validación de datos, logging). Se analizaron ~5800 líneas de `scraper-fabricacion/logs/scraper.log` acumuladas desde mayo, lo que permitió identificar y corregir la causa raíz de por qué algunos proyectos quedaban sin datos de materiales. Cambios aplicados:
-    *   **Causa raíz de "faltan materiales" encontrada y corregida:** un grupo fijo de proyectos (`OP_CLIENTE_B_BANQUINAS`, `OP_CLIENTE_A_Complemento`, `OP_CLIENTE_C_reacondicionado`, entre otros) fallaba en *cada* corrida desde hacía meses porque la búsqueda de materiales para esos proyectos no devolvía ninguna fila. Se verificó en vivo contra el ERP que esto ocurre incluso sin filtro de estado — el proyecto simplemente no tiene datos de logística cargados. Antes, esto se trataba como timeout genérico: 3 reintentos inútiles (~60-90s desperdiciados por proyecto en cada corrida) y el proyecto se marcaba como "fallido". Ahora `extraer_materiales()` (`scraper.py`) detecta el caso de "sin filas" y lo registra como advertencia informativa, sin reintentar ni marcar el proyecto como incidente.
-    *   **Unificación scraper + sync de Odoo:** `main.py` ya no invoca `odoo_sync.py` como subproceso separado (`subprocess.run`); ahora importa `run_sync()` directamente (agregando `odoo-integration/` al `sys.path`). Una sola ejecución con `--sync` hace scraping y sincronización con Odoo en un solo proceso.
-    *   **Reintentos transitorios vs. permanentes (`main.py`):** el loop de reintento por proyecto ahora distingue `PlaywrightTimeoutError` (transitorio: red/sesión/ERP lento — se reintenta con backoff exponencial ~5/10/20s) de cualquier otro error (permanente: típicamente un selector roto — se loguea con traceback completo y no se reintenta). Se agregó una alerta `ERROR` si más del 20% de los proyectos de una corrida fallan, para detectar problemas estructurales del ERP rápidamente.
-    *   **Reintentos en el cliente de Odoo (`odoo_client.py`):** `_call()` ahora reintenta con backoff exponencial ante errores de red y HTTP 5xx (hasta 3 intentos); los HTTP 4xx (errores permanentes de auth/validación) no se reintentan.
-    *   **Validación de datos (`scraper.py`):** `parse_date()` ya no devuelve el string crudo sin parsear cuando no reconoce el formato — ahora loguea una advertencia y devuelve `None`, para que un valor no parseable nunca quede disfrazado de fecha ISO válida en la BD. `parse_float()` loguea una advertencia cuando no puede convertir un valor (antes fallaba en silencio).
-    *   **Guarda defensiva de columnas (`scraper.py`):** `extraer_proyectos()` ahora valida la cantidad de columnas (`<td>`) antes de indexarlas posicionalmente, y loguea un mensaje específico si el ERP cambia la estructura, en vez de un `IndexError` genérico difícil de diagnosticar.
-    *   **Scripts de `test/` reubicados a `scripts/manual_exploration/`:** estos scripts golpean el ERP de producción con credenciales reales y no son un test suite automatizado; tenían rutas absolutas hardcodeadas a otra máquina que no resolvían en este equipo. Se corrigieron las rutas (ahora relativas al propio script) y se les agregó una advertencia explícita en el docstring. `test_db_history.py` (que modifica proyectos reales para probar el historial) ahora requiere el flag `--confirmar` antes de tocar cualquier dato, y ya no usa `os.system()` sino `subprocess.run()`.
-    *   **Higiene del repositorio:** se agregó `.gitignore` (excluye `credenciales.txt`, `.env`, `*.db`, logs), se eliminó una copia duplicada y obsoleta de `fabricacion.db` fuera de `data/`, y se agregaron plantillas de configuración de ejemplo para ambos módulos (hoy `scraper-fabricacion/.env.example` y `odoo-integration/.env.example`).
-6.  **Segunda pasada (11 de agosto de 2026) — credenciales, logging compartido y validación de datos:**
-    *   **Credenciales de respaldo eliminadas (`config.py`):** ya no existe el fallback de usuario/contraseña hardcodeado. Si el archivo de credenciales falta o está incompleto, `config.py` lanza `ConfigError` explícito al arrancar en vez de autenticar en silencio con una cuenta real embebida en el código fuente.
-    *   **Corrección de diagnóstico (con evidencia del usuario):** `OP-ING-XXXXX-000000-0001` **sí tiene materiales cargados** en el ERP (confirmado por captura de pantalla) — la hipótesis anterior de "proyecto sin datos" no aplicaba a este caso. Investigado en vivo, la causa real es doble: (1) la petición AJAX que carga el panel de detalle al hacer clic en "Visualizar Detalle" falla de forma intermitente en el servidor del ERP (a veces HTTP 500, a veces el clic no dispara ninguna petición); y (2) cuando eso pasa, el propio JS del ERP deja su modal de "cargando" (`.jquery-loading-modal`) atascado en pantalla, bloqueando los clics de reintento siguientes. Se corrigió el punto (2) en `extraer_materiales()`: antes de reintentar el clic, se limpia el overlay atascado vía `page.evaluate()`. Verificado en vivo que el clic de reintento ya no se cuelga. El punto (1) es una falla intermitente del lado del ERP fuera del control del scraper; queda mitigada por el reintento local (2 intentos) más el reintento completo de `main.py` (3 intentos con backoff).
-    *   **Logging unificado (`common/logging_utils.py`, nuevo):** `scraper.py` y `odoo-integration/sync_logger.py` ya no definen cada uno su propio setup de `RotatingFileHandler`/`StreamHandler` — ambos llaman a una única función `setup_rotating_logger()` compartida, con manejo de encoding UTF-8 en consola para evitar mojibake con los emoji de los logs en Windows.
-    *   **Selectores de materiales centralizados:** los ~12 selectores de campo de `extraer_materiales_de_seccion()` (antes armados inline con f-strings sueltas, ej. `f"#{pfx}cant_{mid}"`) ahora se arman desde una tabla única `MATERIAL_ID_PATTERNS` en `scraper.py`. Un cambio futuro del ERP en el nombre de un campo es una línea en la tabla.
-    *   **Validación en los modelos (`models.py`):** los 4 dataclasses (`Proyecto`, `Producto`, `ProductoItem`, `Material`) ahora tienen `__post_init__` que valida nombres vacíos, tipos de campos numéricos y que `Material.tipo` sea un valor conocido — cualquier desvío se loguea con contexto en vez de fallar en silencio o recién explotar como `KeyError` río abajo.
-
-7.  **Tercera pasada (11 de agosto de 2026) — typed builders del lado Odoo, suite de tests y limpieza final del repositorio:**
-    *   **Typed builders en `odoo-integration/`:** nuevo `odoo_models.py` con dataclasses `ProyectoLocal`/`ProductoLocal`, reemplazando los `dict` sueltos que usaban `sync_projects.py`/`sync_tasks.py`/`odoo_sync.py`. Un typo en un nombre de campo ahora se detecta al construir el objeto, no recién en producción como `KeyError`. Verificado con `--dry-run` real (75 proyectos, 0 errores) antes y después del cambio.
-        *   *Bug encontrado y corregido en el proceso:* nombrar este archivo `models.py` (igual que `scraper-fabricacion/models.py`) rompía el import de `main.py`, porque ambas carpetas quedan en `sys.path` a la vez (por la unificación del punto 6) y Python cachea el primer módulo `models` que se importa. Se renombró a `odoo_models.py` y se revalidó la corrida completa.
-    *   **Suite de tests (`tests/`, nuevo, con pytest):** 38 tests cubriendo `parse_date`/`parse_float`, la validación `__post_init__` de los dataclasses, y el armado de los payloads que se mandan a Odoo. Corren en <1 segundo, sin tocar el ERP ni Odoo.
-    *   **Limpieza y reestructuración del repositorio** (para publicación en GitHub): se eliminaron los HTML de referencia del ERP, capturas de pantalla de exploración (`scratch/`), un script de conexión suelto sin relación con el proyecto, y un archivo de plan inicial con lenguaje sensible sobre evasión de detección (contenido ya cubierto de forma neutral en §5). Las notas de proceso del desarrollo original (`task.md`, `walkthrough.md`, diagrama de BD) se consolidaron en `docs/historial/`. Este archivo se promovió de `DOCUMENTACION.md` a `README.md` para que GitHub lo muestre como portada del repositorio.
-
-8.  **Credenciales del scraper migradas a `.env` (`config.py`):** el archivo `credenciales.txt` (formato de texto plano casero, parseado línea por línea) se reemplazó por `scraper-fabricacion/.env` (`SET_IN_URL`, `SET_IN_USERNAME`, `SET_IN_PASSWORD`), cargado con `python-dotenv` — el mismo mecanismo que ya usaba `odoo-integration/`, así ambos módulos manejan secretos de la misma forma en vez de tener dos convenciones distintas. La migración se hizo con un script que leyó el archivo viejo y escribió el `.env` directamente, sin que los valores reales pasaran por ningún log ni salida visible. Se mantiene el mismo comportamiento de fallo explícito (`ConfigError`) si faltan datos.
-
-9.  **Cuarta pasada (11 de agosto de 2026) — auditoría de seguridad y clonación previa a la publicación del repositorio:**  
-    Antes de publicar el repositorio se hizo una auditoría dedicada a dos preguntas: qué credenciales podían quedar expuestas, y qué le pasaría a alguien que clonara el repo desde cero. La auditoría encontró el repositorio limpio de secretos versionados (ninguna credencial real en el historial), pero varios problemas de reproducibilidad y algunos detalles de exposición menores. Cambios aplicados:
-    *   **CI roto en el primer push, corregido:** `requirements-dev.txt` solo traía `pytest`, pero `tests/test_odoo_builders.py` importa `sync_projects.py`, que arrastra `requests` y `python-dotenv` al nivel de módulo. El CI moría en la recolección de tests (`ModuleNotFoundError`, exit 2) sin correr ninguno de los 38 tests. Ahora `requirements-dev.txt` referencia `odoo-integration/requirements.txt` con `-r`.
-    *   **Pin de Playwright desactualizado:** `1.44.0` (mayo 2024) arrastraba `greenlet==3.0.3`, sin wheel binario para Python ≥3.13 — instalaba compilando desde fuente en Windows. Se subió a `1.62.0` (`greenlet` 3.5.5, con wheel para 3.10–3.13) y se validó con una prueba de humo real contra el ERP de producción (3 proyectos, sin `--sync`, sobre una copia aislada de la BD).
-    *   **Orden de errores en `odoo_sync.py`:** en un clon limpio (sin `fabricacion.db` porque `data/` está gitignored), `--dry-run` fallaba en silencio al crear la tabla de log, seguía de largo, y volvía a fallar 20 líneas después con un segundo mensaje para la misma causa. Ahora corta con un solo mensaje claro. De paso se eliminó una copia duplicada de la resolución de ruta de la BD (`_get_db_path()`, repetida en `sync_logger.py` y `database_reader.py`).
-    *   **Validación de credenciales de Odoo en `--dry-run`:** `--dry-run` sin `.env` corría igual sin avisar de la falta de configuración (el mismo antipatrón de fallo silencioso que ya se había corregido en `config.py`). Ahora valida siempre, y solo se saltea en dry-run la verificación de conectividad real contra el servidor.
-    *   **Nombres de proyecto hardcodeados rotos por la anonimización:** `test_db_history.py` y `test_scrape_suministros.py` (`scripts/manual_exploration/`) tenían un nombre de proyecto de ejemplo que quedó desactualizado. En `test_db_history.py` esto hacía que el `UPDATE` de prueba afectara 0 filas en silencio y el script igual imprimiera el historial preexistente como si hubiera verificado algo. Ambos scripts ahora resuelven el proyecto desde la BD local (o por `--proyecto` explícito) y `test_db_history.py` aborta si el `UPDATE` no afecta ninguna fila.
-    *   **Lock del scraper con TTL:** `acquire_lock()` guardaba solo el PID pelado; si Windows reciclaba ese PID hacia un proceso sin relación con el scraper, `main.py` concluía "ya hay otra instancia" y salía con código 0 — éxito para el Programador de Tareas — dejando al bot sin correr en absoluto silencio. Ahora el lock guarda PID + timestamp de inicio, con un TTL de 60 minutos (basado en que las corridas completas reales tardan entre 12 y 18.5 minutos) para distinguir un solapamiento legítimo de una instancia colgada o un PID reciclado.
-    *   **`.gitattributes` nuevo:** normaliza finales de línea (CRLF para `.bat`/`.cmd`, LF para el resto), para que los lanzadores no queden con LF en un clon con `core.autocrlf=false`.
-    *   **`.gitignore` ampliado:** mismo principio que las reglas de `.env` (amplias, no atadas a un nombre exacto) aplicado a otros nombres de archivo de secretos que hoy no existen en el repo pero podrían introducirse sin pensar (`credenciales.*`, `secrets.*`, certificados, claves SSH, `.netrc`) y a respaldos/volcados de datos (`*.db.bak`, `backup/`, `export/`).
-    *   **Exposición de credenciales:** el README nombraba en texto plano el usuario de la cuenta compartida del ERP (la mitad del par de credenciales); `test_login.py` (`scripts/manual_exploration/`) imprimía URL y usuario por stdout. Ambos corregidos sin dejar el valor real en ningún lado.
-    *   **Lenguaje "stealth" reencuadrado:** el título de §5 y varios comentarios describían la compatibilidad de navegador del bot (deshabilitar `navigator.webdriver`, User-Agent real, tipeo con delay) en términos de evasión. El código no cambió — es lo que un ERP pensado para navegación manual necesita para tratar al bot igual que a un operador humano —, pero la descripción sí, para reflejar el propósito real: automatizar una extracción que antes se hacía a mano vía planillas XLSX (el ERP no tiene API ni acceso a su BD).
+1.  **Migración de 2 a 3 Niveles en el Scraper y BD:** Normalización de la BD en `proyectos`, `proyecto_productos` y `producto_items`.
+2.  **Creación de Tablas de Historial de Estados:** Tablas dedicadas de auditoría de transiciones de estado.
+3.  **Sincronización de Productos en Odoo:** Adaptación histórica a nivel de producto.
+4.  **Limpieza Automatizada de Tareas Antiguas:** Vaciado de registros huérfanos históricos en lotes.
+5.  **Revisión de código (11 de agosto de 2026):** Detección de proyectos sin materiales sin marcar fallo, unificación scraper+sync en un solo proceso (`main.py --sync`), y reintentos transitorios vs permanentes.
+6.  **Segunda pasada (11 de agosto de 2026):** Eliminación de credenciales hardcodeadas, logging unificado (`common/logging_utils.py`) y validación `__post_init__` en modelos.
+7.  **Tercera pasada (11 de agosto de 2026):** Typed models en `odoo-integration/` y suite inicial de tests unitarios.
+8.  **Credenciales migradas a `.env`:** Estandarización de configuración con `python-dotenv`.
+9.  **Cuarta pasada (11 de agosto de 2026):** Auditoría de seguridad, pin de Playwright actualizado y lock de proceso con TTL.
+10. **Quinta pasada (18 de agosto de 2026) — Ubicaciones de producción en Odoo (`stock.location`):**
+    *   **Reemplazo de Proyectos/Tareas por Ubicaciones de Producción:** Se reemplazó la sincronización hacia `project.project` / `project.task` por la creación de ubicaciones virtuales de producción (`stock.location` con `usage='production'`) bajo el nodo raíz `Production` en Odoo 19.0.
+    *   **Selección por corrida del bot:** La sincronización ya no recorre la base completa de proyectos; filtra exclusivamente los proyectos procesados en la última corrida válida (`timestamp_fin IS NOT NULL AND proyectos_procesados > 0`), o una corrida puntual vía `--ejecucion-id <ID>`. En el flujo integrado (`main.py --sync`), el bot pasa su `ejecucion_id` en curso.
+    *   **Nueva columna `odoo_location_id`:** Agregada de forma idempotente a la tabla `proyectos` de SQLite (`ensure_odoo_id_columns()`). Las columnas y tablas históricas (`odoo_id`, `odoo_sync_log`) se mantienen intactas para preservar la trazabilidad.
+    *   **Resolución robusta del padre `Production`:** Búsqueda por XML ID y fallback con validación contra sub-ubicaciones hijas y normalización de `company_id`.
+    *   **Saneamiento bidireccional y búsqueda global defensiva:** Saneamiento idéntico de nombres (`/` → `-`) al buscar y al crear, con búsqueda bajo `Production` y búsqueda global anti-colisiones en otras ramas.
+    *   **Simulación real (`--dry-run`):** Ahora ejecuta todas las lecturas reales contra Odoo y la BD local sin escribir ningún registro.
+    *   **Suite de tests ampliada:** 60 tests unitarios con `pytest` (28 tests nuevos entre `test_odoo_locations.py` y `test_run_selection.py`), ejecutándose sin dependencias de red ni `.env`.
 
 ---
 
@@ -484,10 +459,16 @@ En `scraper-fabricacion/`, se pueden usar los siguientes scripts Batch (.bat) pr
 En `odoo-integration/`, para sincronizar sin re-scrapear:
 *   **`run_sync.bat`** (o `python odoo_sync.py`), soporta argumentos:
     ```powershell
-    python odoo_sync.py                   # Sincronización normal
-    python odoo_sync.py --dry-run         # Simulación, no escribe en Odoo
-    python odoo_sync.py --only-projects   # Solo proyectos, sin tareas/productos
+    python odoo_sync.py                      # Sincroniza proyectos de la última corrida válida
+    python odoo_sync.py --dry-run            # Simulación real: solo lecturas, sin escribir en Odoo ni BD
+    python odoo_sync.py --limit 1            # Smoke test procesando 1 solo proyecto
+    python odoo_sync.py --ejecucion-id 39    # Sincroniza proyectos de una corrida puntual por ID
     ```
+
+**Orden recomendado para puestas en marcha o verificación:**
+1. `python odoo_sync.py --dry-run` (verificar resolución de corrida, padre y conteos).
+2. `python odoo_sync.py --limit 1` (crear 1 ubicación piloto y auditar en Odoo).
+3. `python odoo_sync.py` (lote completo de la corrida).
 
 ### Tests
 
@@ -496,11 +477,13 @@ Desde la raíz del proyecto:
 pip install -r requirements-dev.txt
 pytest
 ```
-La suite (`tests/`) corre en menos de un segundo y no hace ninguna llamada al ERP ni a Odoo — valida las funciones puras de parseo (`parse_date`, `parse_float`), la validación de los dataclasses, y el armado de los payloads que se envían a Odoo.
+La suite (`tests/`) corre en menos de un segundo (60 tests) y no hace ninguna llamada de red al ERP ni a Odoo — valida:
+*   Funciones puras de parseo (`tests/test_parsing.py`).
+*   Validación `__post_init__` de los dataclasses del scraper (`tests/test_models.py`).
+*   Saneo de nombres, armado de payloads y resolución de ubicaciones de Odoo (`tests/test_odoo_locations.py`).
+*   Lógica de selección y ordenamiento de proyectos por corrida en SQLite (`tests/test_run_selection.py`).
 
-**No requiere `.env` ni navegador instalado:** corre tal cual en un clon recién hecho y en CI. Las funciones de parseo viven en `scraper-fabricacion/parsing.py`, que solo depende de la stdlib, justamente para que importarlas no arrastre `config.py` (que lee el `.env` en tiempo de import y aborta la colección de pytest si falta).
-
-`requirements-dev.txt` incluye además las dependencias de `odoo-integration/` (`requests`, `python-dotenv`): `tests/test_odoo_builders.py` importa `sync_projects.py`/`sync_tasks.py`, que a su vez importan `odoo_client.py` y cargan `.env` con `python-dotenv` al nivel de módulo — sin esas dos deps, pytest falla en la recolección (`ModuleNotFoundError`) antes de correr un solo test. Playwright sigue **fuera** de `requirements-dev.txt` a propósito: no hace falta el navegador para esta suite.
+**No requiere `.env` ni navegador instalado:** corre tal cual en un clon recién hecho y en CI.
 
 ### Configuración del Programador de Tareas de Windows
 
