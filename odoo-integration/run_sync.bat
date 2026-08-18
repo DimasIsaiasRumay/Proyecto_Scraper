@@ -3,7 +3,7 @@ REM run_sync.bat — Ejecutar sincronización con Odoo manualmente
 REM Uso: doble clic o ejecutar desde terminal
 
 echo ============================================
-echo   Sincronizacion de Proyectos con Odoo
+echo   Sincronizacion de Ubicaciones de Produccion con Odoo
 echo ============================================
 echo.
 
