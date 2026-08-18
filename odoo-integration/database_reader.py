@@ -63,6 +63,8 @@ def ensure_odoo_id_columns():
         columns_proyectos = [row["name"] for row in cursor.fetchall()]
         if "odoo_id" not in columns_proyectos:
             conn.execute("ALTER TABLE proyectos ADD COLUMN odoo_id INTEGER")
+        if "odoo_location_id" not in columns_proyectos:
+            conn.execute("ALTER TABLE proyectos ADD COLUMN odoo_location_id INTEGER")
 
         # Verificar si la columna ya existe en 'proyecto_productos'
         cursor.execute("PRAGMA table_info(proyecto_productos)")
@@ -158,6 +160,19 @@ def save_project_odoo_id(proyecto_nombre: str, odoo_id: int):
             conn.execute(
                 "UPDATE proyectos SET odoo_id = ? WHERE nombre = ?",
                 (odoo_id, proyecto_nombre)
+            )
+    finally:
+        conn.close()
+
+
+def save_project_location_id(proyecto_nombre: str, location_id: int) -> None:
+    """Guarda el ID de la ubicación de Odoo para un proyecto en la BD local."""
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE proyectos SET odoo_location_id = ? WHERE nombre = ?",
+                (location_id, proyecto_nombre)
             )
     finally:
         conn.close()
