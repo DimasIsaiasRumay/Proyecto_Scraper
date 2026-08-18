@@ -33,7 +33,6 @@ logger = setup_sync_logger()
 
 def run_sync(
     dry_run: bool = False,
-    only_projects: bool = False,
     ejecucion_id: Optional[int] = None,
     limit: Optional[int] = None,
 ) -> int:
@@ -42,7 +41,6 @@ def run_sync(
 
     Parámetros:
         dry_run: Si True, realiza solo consultas de lectura sin modificar Odoo ni la BD local.
-        only_projects: Conservado por compatibilidad (no-op; ya no se crean tareas).
         ejecucion_id: ID de una corrida puntual. Si es None, usa la última corrida válida terminada.
         limit: Cantidad máxima de proyectos a procesar (ordenados por nombre).
 
@@ -58,8 +56,6 @@ def run_sync(
     logger.info(f"INICIO DE SINCRONIZACIÓN CON ODOO — {timestamp}")
     if dry_run:
         logger.info("⚠️  MODO DRY-RUN: No se realizarán cambios en Odoo ni en la BD local")
-    if only_projects:
-        logger.info("ℹ️  --only-projects ya no tiene efecto (no se crean tareas).")
     logger.info("=" * 70)
 
     # 1. Verificar que la BD del scraper exista, inicializar la tabla de log
@@ -202,11 +198,6 @@ Ejemplos:
         help="Simula la sincronización sin hacer cambios en Odoo ni en la BD local.",
     )
     parser.add_argument(
-        "--only-projects",
-        action="store_true",
-        help="Obsoleto: ya no se crean tareas/productos (no-op).",
-    )
-    parser.add_argument(
         "--ejecucion-id",
         type=int,
         default=None,
@@ -222,7 +213,6 @@ Ejemplos:
 
     exit_code = run_sync(
         dry_run=args.dry_run,
-        only_projects=args.only_projects,
         ejecucion_id=args.ejecucion_id,
         limit=args.limit,
     )
