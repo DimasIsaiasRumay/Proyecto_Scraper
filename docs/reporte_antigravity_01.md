@@ -85,10 +85,10 @@
 ---
 
 ### Fase 7 — Pruebas automáticas
-- **Qué se hizo:** Se eliminó `tests/test_odoo_builders.py`. Se crearon `tests/test_odoo_locations.py` (18 tests unitarios con `FakeClient`) y `tests/test_run_selection.py` (10 tests con base de datos SQLite temporal aislada).
+- **Qué se hizo:** Se eliminó `tests/test_odoo_builders.py` (10 tests). Se crearon `tests/test_odoo_locations.py` (22 tests unitarios con `FakeClient`) y `tests/test_run_selection.py` (10 tests con base de datos SQLite temporal aislada).
 - **Hash de commit:** `5cd5361` (`test(odoo): pruebas de ubicaciones y de selección por corrida (Fase 7)`)
 - **Criterio de aceptación y resultado real:**
-  - `python -m pytest -q` → 60 tests pasados (28 tests nuevos, superior al mínimo de 28).
+  - `python -m pytest -q` → 60 tests pasados (32 tests nuevos entre los dos archivos, superior al mínimo de 28; baseline de 38 menos los 10 de `test_odoo_builders.py` más los 32 nuevos = 60).
   - Ninguna dependencia de red en tests (`grep -rn "requests\|OdooClient()" tests/` vacío).
   - Verificado en Python 3.10 vía compilación de bytecode y ejecución en pytest.
 
@@ -96,7 +96,7 @@
 
 ### Fase 8 — Documentación (README + plan)
 - **Qué se hizo:** Se actualizó `README.md` (diagramas de arquitectura §2 y §6, árbol §3, esquema ER §4 con `odoo_location_id`, nueva sección §6 de `stock.location`, entrada de cambios recientes §7 y guía de operación §8 con los 4 flags). Se actualizó `docs/plan_stock_locations.md` marcando Fases 0 a 8 en `✅ Hecho`. Se generó el presente reporte `docs/reporte_antigravity_01.md`.
-- **Hash de commit:** `6860162` (`docs: README y plan al día con las ubicaciones de producción (Fase 8)`)
+- **Hash de commit:** `b8cf7f4` (`docs: README y plan al día con las ubicaciones de producción (Fase 8)`)
 - **Criterio de aceptación y resultado real:** Documentación sincronizada con el estado actual del sistema.
 
 ---
