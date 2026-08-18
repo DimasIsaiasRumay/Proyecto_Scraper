@@ -25,7 +25,7 @@
 | 6 | Verificación en simulación (`--dry-run`) | ✅ Hecho |
 | 7 | Pruebas automáticas | ✅ Hecho |
 | 8 | Documentación (README + este plan) | ✅ Hecho |
-| 9 | Corrida real: `--limit 1`, luego lote completo | ⬜ Pendiente (requiere aprobación) |
+| 9 | Corrida real: `--limit 1`, luego lote completo | ✅ Hecho |
 
 Marcadores: ⬜ Pendiente · 🔄 En curso · ✅ Hecho · ⏸️ Bloqueado
 
@@ -686,21 +686,34 @@ la tabla de estados en ✅.
 
 ---
 
-## Fase 9 — Corrida real (requiere aprobación explícita)
+## Fase 9 — Corrida real (ejecutada con aprobación explícita, 18/08/2026)
 
-**Estado:** ⬜ Pendiente
+**Estado:** ✅ Hecho
 
-**No ejecutar sin luz verde.** Crea registros en el Odoo de producción.
+Resultados reales, verificados de forma independiente contra Odoo y la BD local
+después de cada paso:
 
-1. `python odoo_sync.py --limit 1` → crea **1** ubicación. Verificar:
-   - log: `✅ Ubicación creada: '<nombre>' (Odoo ID: <id>)`
-   - Odoo: total `stock.location` pasa de 8 a 9; el nuevo registro tiene `location_id=[12,'Production']`, `usage='production'`, `complete_name='Production/<nombre>'`.
-   - BD local: 1 fila con `odoo_location_id` no nulo; `odoo_sync_log` +1 fila con `odoo_model='stock.location'`.
-2. Reportar y **detenerse** para verificación.
-3. Con la segunda luz verde: `python odoo_sync.py` (lote completo) → 24 creadas, 1 sin cambios (o 23/2 si el paso 1 ya creó una).
-4. **Segunda corrida seguida, sin cambios de datos** — la prueba de idempotencia
-   que caza el bug del duplicado: debe dar **0 creadas / 25 sin cambios**, y el
-   total de `stock.location` en Odoo no puede moverse.
+1. `python odoo_sync.py --limit 1` → **1 creada**, Odoo ID **17**
+   (`OP-AMX-EMIX-070826-0001`), `complete_name='Production/OP-AMX-EMIX-070826-0001'`,
+   `usage='production'`, `location_id=[12,'Production']`. `stock.location` pasó
+   de 8 a **9**. BD local: 1 fila con `odoo_location_id=17`; `odoo_sync_log`
+   3378 → **3379**, fila `accion='created'`, `odoo_model='stock.location'`.
+2. Reportado y detenido para verificación — aprobado.
+3. `python odoo_sync.py` (lote completo, corrida #39) → **23 creadas, 2 sin
+   cambios** (`OP-AMX-EMIX-070826-0001` id 17 del paso 1 + `OP-CTOM-GAB-120826-0002`
+   id 16 preexistente), **0 avisos, 0 errores**. `stock.location` pasó de 9 a
+   **32**. Los 25 hijos de `Production` corresponden exactamente a los 25
+   nombres de la corrida 39. BD local: 25 proyectos con `odoo_location_id`;
+   `odoo_sync_log` 3378 → **3402** (+24 filas, todas `created`).
+4. **Prueba de idempotencia** — segunda corrida seguida, sin cambios de datos:
+   `python odoo_sync.py` → **0 creadas / 25 sin cambios / 0 avisos / 0 errores**.
+   `stock.location` se mantuvo en **32**, sin moverse. Sin duplicados: el bug
+   que este paso está diseñado para cazar no se manifestó.
+
+Corrección aplicada durante esta fase: el log de conexión imprimía
+`client.url` (la URL del Odoo de producción), en contra de la decisión 8. Se
+sacó del mensaje (`odoo_sync.py`, commit `9592b63`) antes de correr el lote
+completo.
 
 ---
 
