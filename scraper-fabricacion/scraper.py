@@ -502,6 +502,7 @@ def extraer_materiales(page: Page, proyecto_nombre: str) -> List[Material]:
     # siguientes ("subtree intercepts pointer events") — por eso reintentar
     # el clic sin más no alcanza: hay que limpiar el overlay atascado antes.
     MAX_INTENTOS_DETALLE = 2
+    detalle_cargo = False
     for intento_detalle in range(1, MAX_INTENTOS_DETALLE + 1):
         if intento_detalle > 1:
             # Limpiar cualquier modal de "cargando" que haya quedado
@@ -514,6 +515,7 @@ def extraer_materiales(page: Page, proyecto_nombre: str) -> List[Material]:
         logger.info(f"Esperando que cargue la sección de detalleProyecto (intento {intento_detalle}/{MAX_INTENTOS_DETALLE})...")
         try:
             page.wait_for_selector("#detalleProyecto table", timeout=TIMEOUT_ELEMENT)
+            detalle_cargo = True
             break
         except PlaywrightTimeoutError:
             if intento_detalle < MAX_INTENTOS_DETALLE:
@@ -522,22 +524,91 @@ def extraer_materiales(page: Page, proyecto_nombre: str) -> List[Material]:
                     f"{TIMEOUT_ELEMENT}ms (falla intermitente conocida del ERP). "
                     f"Reintentando el clic..."
                 )
-            else:
-                raise
+            # Antes acá iba un `else: raise` directo tras agotar los
+            # MAX_INTENTOS_DETALLE intentos. Ahora, antes de dar el proyecto
+            # por perdido, se prueba el fallback de "Editar Formulario" (ver
+            # _intentar_fallback_formulario y docs/plan_fallback_formulario.md
+            # Fase 4) — si tampoco carga, se sigue lanzando la misma
+            # excepción de siempre más abajo, así que el comportamiento para
+            # un ERP realmente caído no cambia.
+
+    vista = "detalle"
+    if not detalle_cargo:
+        if _intentar_fallback_formulario(page, target_row, proyecto_nombre):
+            detalle_cargo = True
+            vista = "formulario"
+        else:
+            raise PlaywrightTimeoutError(
+                f"Timeout esperando #detalleProyecto table para '{proyecto_nombre}' "
+                f"tras {MAX_INTENTOS_DETALLE} intentos de 'Visualizar Detalle' y el "
+                f"fallback a 'Editar Formulario'."
+            )
     human_delay(1.0, 2.0)
-    
+
     # Obtener las listas de IDs de la fila
     hdn_items = page.locator("#hdnItemsId").get_attribute("value")
     hdn_suministros = page.locator("#hdnSuministrosId").get_attribute("value")
-    
+
     item_ids = [x.strip() for x in hdn_items.split(",") if x.strip()] if hdn_items else []
     suministro_ids = [x.strip() for x in hdn_suministros.split(",") if x.strip()] if hdn_suministros else []
-    
+
     logger.info(f"Proyecto '{proyecto_nombre}': {len(item_ids)} items, {len(suministro_ids)} suministros encontrados.")
-    
+
     materiales = []
     # Procesar ambas secciones
-    materiales.extend(extraer_materiales_de_seccion(page, item_ids, "item", proyecto_nombre))
-    materiales.extend(extraer_materiales_de_seccion(page, suministro_ids, "suministro", proyecto_nombre))
-    
+    materiales.extend(extraer_materiales_de_seccion(page, item_ids, "item", proyecto_nombre, vista=vista))
+    materiales.extend(extraer_materiales_de_seccion(page, suministro_ids, "suministro", proyecto_nombre, vista=vista))
+
     return materiales
+
+
+def _intentar_fallback_formulario(page: Page, target_row: Locator, proyecto_nombre: str) -> bool:
+    """Fallback de extraer_materiales() cuando 'Visualizar Detalle' se agota
+    tras MAX_INTENTOS_DETALLE intentos (ver el comentario sobre la falla
+    intermitente conocida del ERP, unas líneas más arriba). Abre 'Editar
+    Formulario' en su lugar.
+
+    SOLO LECTURA: nunca hace fill()/select_option()/check()/press() ni
+    clickea "Guardar" — el único click acá es para ABRIR el formulario, no
+    para modificarlo. Investigado en vivo contra el ERP real
+    (docs/plan_fallback_formulario.md, Fase 2): el endpoint que dispara este
+    ícono del lado del servidor se llama "actualizar..." (nombre engañoso),
+    pero comparado con el endpoint de solo lectura "visualizar...", ambos
+    devuelven la misma forma de respuesta (un fragmento HTML para inyectar
+    en '#detalleProyecto') sin ningún flag de éxito de guardado ni dato
+    persistido — no hay evidencia de que abrir el formulario escriba nada.
+
+    "Editar Formulario" comparte el mismo contenedor '#detalleProyecto
+    table' que "Visualizar Detalle" (verificado en vivo), así que no hace
+    falta un selector de espera distinto.
+
+    Devuelve True si el formulario cargó, False si también falló (en cuyo
+    caso el llamador sigue tratando el proyecto como fallido, igual que
+    antes de que existiera este fallback).
+    """
+    editar_btn = target_row.locator("img[title='Editar Formulario']")
+    if editar_btn.count() == 0:
+        logger.warning(
+            f"'{proyecto_nombre}': no se encontró el ícono 'Editar Formulario' "
+            f"para el fallback tras agotar 'Visualizar Detalle'."
+        )
+        return False
+
+    logger.warning(
+        f"'{proyecto_nombre}': 'Visualizar Detalle' no cargó tras los reintentos. "
+        f"Probando fallback de solo lectura vía 'Editar Formulario'..."
+    )
+    page.evaluate("document.querySelectorAll('.jquery-loading-modal').forEach(el => el.remove())")
+    human_delay(1.0, 2.0)
+    editar_btn.first.click()
+    try:
+        page.wait_for_selector("#detalleProyecto table", timeout=TIMEOUT_ELEMENT)
+    except PlaywrightTimeoutError:
+        logger.warning(f"'{proyecto_nombre}': el fallback a 'Editar Formulario' también agotó el timeout.")
+        return False
+
+    logger.warning(
+        f"Proyecto '{proyecto_nombre}': 'Visualizar Detalle' no estuvo disponible, "
+        f"extraído vía 'Editar Formulario' (solo lectura) en su lugar."
+    )
+    return True
