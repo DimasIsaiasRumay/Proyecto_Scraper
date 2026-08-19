@@ -14,7 +14,7 @@
 |---|---|---|
 | 0 | Preparación (rama, baseline verde) | ✅ Hecho |
 | 1 | Quick win: sacar re-login redundante | ✅ Hecho |
-| 2 | Reconocimiento DOM comparado (solo lectura) | ⏸️ Bloqueado — ver hallazgo de red |
+| 2 | Reconocimiento DOM comparado (solo lectura) | ✅ Hecho |
 | 3 | Lector de campos agnóstico al tipo de elemento | ⬜ Pendiente |
 | 4 | Fallback en `extraer_materiales()` | ⬜ Pendiente |
 | 5 | Guardas anti-escritura | ⬜ Pendiente |
@@ -308,6 +308,41 @@ correspondía a una verificación manual **previa** a esta corrida del script
 automatizada, que es la que disparó el POST a "actualizar". Se corrige acá
 para no dar por buena una validación que no corresponde a lo que se está
 evaluando.
+
+### ✅ Resuelto — se agregó captura de la respuesta del servidor (19/08/2026)
+
+Se extendió `MonitorEscrituras` para leer también el **cuerpo de la
+respuesta** de cada request de escritura detectada (`response.text()`, solo
+lectura). Segunda corrida sobre los 3 proyectos:
+
+Los 3 `POST` a `actualizarProyectoMaterialLogisticaMaster` devuelven
+`{"detalle": "<html con la tabla completa, con inputs/selects>", ...}` —
+**la misma forma exacta** que la respuesta de
+`visualizarProyectoMaterialLogisticaMaster` (`{"detalle": "<html con
+spans>"}`), que es el endpoint que el scraper ya usa en producción hoy sin
+incidentes. Ningún body trae ID de registro guardado, timestamp, ni un flag
+de éxito de guardado (`{"success":true}` o similar) — ambos endpoints solo
+devuelven markup para inyectar en `#detalleProyecto`, uno en versión de solo
+lectura y el otro en versión editable.
+
+**Conclusión (con la salvedad de que no se pudo confirmar contra logs o BD
+del lado del servidor):** el nombre "actualizar" del endpoint es engañoso —
+la evidencia disponible (forma de la respuesta, ausencia de flags de
+guardado, valores idénticos entre Detalle y Formulario, coincidencia con la
+verificación manual del usuario contra la captura original de
+`OP-AMX-EMIX-070826-0001`) indica que abrir `Editar Formulario` **regenera y
+devuelve el formulario editable, no persiste nada**. Se procede a la Fase 3.
+Como resguardo adicional (no porque haga falta, sino porque no cuesta nada
+y es defensa en profundidad), la Fase 5 igual incluye un monitor de
+escrituras real dentro del fallback de producción — si alguna vez esta
+conclusión resultara incompleta bajo otras condiciones, quedaría como error
+visible en el log, no como corrupción silenciosa.
+
+Bonus de esta segunda corrida: el remapeo de IDs de la Fase 3 (`precio_sw`,
+`precio_compra`, `orden_compra`/`numero_factura` de suministro → no existen
+con el ID de Detalle) se repite **idéntico** en los 3 proyectos, incluidos
+los 2 rotos — confirma que la tabla de remapeo no es una particularidad del
+proyecto sano.
 
 ---
 
