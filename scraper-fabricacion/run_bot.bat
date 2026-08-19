@@ -9,4 +9,4 @@ if errorlevel 1 (
 ) else (
     set "PYRUN=py -3.10"
 )
-%PYRUN% main.py --sync
+%PYRUN% main.py --sync --presupuesto

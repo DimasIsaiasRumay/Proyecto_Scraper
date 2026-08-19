@@ -66,7 +66,7 @@ def scrape_budget_materials():
             login(page)
             
             # Navigate to budget page
-            url = f"{config.BASE_URL}/proyecto_master_presupuesto_v19.html"
+            url = config.URL_PRESUPUESTO
             logger.info(f"Navegando a presupuestos: {url}")
             page.goto(url, timeout=config.TIMEOUT_NAV)
             human_delay(2, 3)
@@ -84,10 +84,58 @@ def scrape_budget_materials():
             logger.info("Haciendo clic en 'Buscar'...")
             page.click("#find")
             
-            # Wait for rows to load
-            logger.info("Esperando que cargue el listado (15s)...")
-            human_delay(15.0, 15.0)
-            
+            # Esperar a que el listado TERMINE de cargar.
+            #
+            # Antes acá había un human_delay(15.0, 15.0) fijo. El problema: la
+            # tabla trae ~14.000 filas (medido en vivo el 19/08/2026), así que
+            # si algún día la carga tarda 16s en vez de 15, el page.evaluate()
+            # de más abajo devuelve 0 filas, los ~134 combos dan MISS y el
+            # script igual termina logueando "Extracción finalizada con éxito"
+            # — falla silenciosa.
+            #
+            # Tampoco alcanza con un wait_for_selector("#tablaTree tbody tr") a
+            # secas: retorna apenas aparece la PRIMERA fila, con las otras
+            # 14.000 todavía renderizando, y sería peor que la espera fija.
+            #
+            # Por eso: se espera la primera fila (falla rápido y explícito si
+            # el listado nunca carga) y después se sondea el conteo hasta que
+            # se estabilice, que es la señal real de "terminó de renderizar".
+            logger.info("Esperando que cargue el listado...")
+            try:
+                page.wait_for_selector("#tablaTree tbody tr", timeout=config.TIMEOUT_ELEMENT)
+            except Exception:
+                logger.error(
+                    "El listado de presupuesto no devolvió ninguna fila en "
+                    f"{config.TIMEOUT_ELEMENT}ms. Se aborta sin guardar nada, en vez de "
+                    "seguir y reportar 0 coincidencias como si fuera una corrida exitosa."
+                )
+                return
+
+            ESPERA_MAX_SEGUNDOS = 90
+            SONDEOS_ESTABLES_REQUERIDOS = 3
+            filas_previas = -1
+            sondeos_estables = 0
+            inicio_espera = datetime.now()
+            while (datetime.now() - inicio_espera).total_seconds() < ESPERA_MAX_SEGUNDOS:
+                filas_actuales = page.evaluate(
+                    "() => document.querySelectorAll('#tablaTree tbody tr').length"
+                )
+                if filas_actuales == filas_previas:
+                    sondeos_estables += 1
+                    if sondeos_estables >= SONDEOS_ESTABLES_REQUERIDOS:
+                        break
+                else:
+                    sondeos_estables = 0
+                    filas_previas = filas_actuales
+                human_delay(1.0, 1.0)
+            else:
+                logger.warning(
+                    f"El listado siguió creciendo tras {ESPERA_MAX_SEGUNDOS}s "
+                    f"({filas_previas} filas hasta ahora). Se continúa igual, pero el "
+                    f"resultado podría estar incompleto."
+                )
+            logger.info(f"Listado estabilizado en {filas_previas} filas.")
+
             logger.info("Extrayendo datos de la tabla mediante evaluación JS (Optimizado)...")
             rows_data = page.evaluate("""() => {
                 const rows = Array.from(document.querySelectorAll('#tablaTree tbody tr'));
@@ -103,7 +151,18 @@ def scrape_budget_materials():
             }""")
             
             logger.info(f"Se extrajeron {len(rows_data)} filas del DOM.")
-            
+
+            # Guarda contra la falla silenciosa: si no se extrajo nada, no
+            # tiene sentido seguir — el emparejamiento daría 0 MATCH / 134
+            # MISS y el script terminaría con "✅ finalizada con éxito",
+            # pisando además el JSON de salida con una lista vacía.
+            if not rows_data:
+                logger.error(
+                    "No se extrajo ninguna fila del listado de presupuesto. Se aborta "
+                    "sin tocar la base ni el JSON, para no reemplazar datos buenos por vacío."
+                )
+                return
+
             # 3. Parse hierarchy
             logger.info("Estructurando árbol jerárquico de proyectos y productos...")
             current_project = None

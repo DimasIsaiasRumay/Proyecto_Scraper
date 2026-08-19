@@ -339,8 +339,12 @@ flowchart TD
     *   **Por qué hace falta remapeo de IDs:** 4 de los 12 campos de materiales (`precio_sw`, `precio_compra`, y `orden_compra`/`numero_factura` de suministros) usan un `id` de DOM **distinto** entre las dos vistas, no solo un tag distinto — verificado en vivo contra el ERP real. `MATERIAL_ID_OVERRIDES_FORMULARIO` registra esas 4 diferencias.
     *   **Validado end-to-end contra el ERP real** (19/08/2026) sobre los 2 proyectos que venían fallando: extracción completa sin excepciones, sin actividad de escritura detectada, y coincidencia campo a campo confirmada a mano contra la UI.
 
-6.  **Herramienta complementaria — Materiales por Producto (`extraer_materiales_presupuesto.py`):**  
-    Desglosa materiales por producto y captura dimensiones de cada pieza desde la sección Presupuesto del ERP.
+6.  **Materiales por Producto (`extraer_materiales_presupuesto.py`):**  
+    Desglosa materiales por producto y captura dimensiones de cada pieza desde la sección Presupuesto del ERP, poblando `proyecto_producto_materiales`.
+
+    Se ejecuta encadenado al final de una corrida normal con el flag `--presupuesto` (ya incluido en `run_bot.bat` y `run_bot_manual.bat`). Antes era un script suelto sin ningún disparador automático, y en la práctica quedó **casi 2 meses sin correr** (última actualización: 24/06/2026) dejando la tabla desactualizada en silencio. También se puede seguir corriendo solo, con `run_budget_materials.bat`.
+
+    Un fallo acá se loguea como `ERROR` pero **no tumba la corrida principal** — para ese punto el scraping y la sincronización con Odoo ya terminaron.
 
 ---
 
@@ -460,8 +464,8 @@ Para configurar la máquina local o servidor que ejecute los bots:
 
 En `scraper-fabricacion/`, se pueden usar los siguientes scripts Batch (.bat) preconfigurados:
 
-*   **`run_bot.bat` (Modo Automático):** Scraping + sincronización con Odoo en un solo proceso (`main.py --sync`). Solo funcionará dentro de las ventanas horarias permitidas (`06:11-07:22` y `16:00-17:00`).
-*   **`run_bot_manual.bat` (Modo Forzado/Manual):** Igual que el anterior (`main.py --force --sync`), pero ignora la restricción de horario.
+*   **`run_bot.bat` (Modo Automático):** Scraping + sincronización con Odoo + materiales de Presupuesto en un solo proceso (`main.py --sync --presupuesto`). Solo funcionará dentro de las ventanas horarias permitidas (`06:11-07:22` y `16:00-17:00`).
+*   **`run_bot_manual.bat` (Modo Forzado/Manual):** Igual que el anterior (`main.py --force --sync --presupuesto`), pero ignora la restricción de horario.
 *   **`run_bot_test.bat` (Modo Prueba):** Lanza `main.py --force --test`. Solo scraping, limitado a los primeros 3 proyectos — útil para verificar selectores del ERP rápidamente sin tocar Odoo.
 *   **`run_budget_materials.bat`:** Corre `extraer_materiales_presupuesto.py` (ver §5) — requiere que el scraper principal ya haya corrido al menos una vez.
 

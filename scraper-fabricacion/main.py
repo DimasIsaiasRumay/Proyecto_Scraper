@@ -28,6 +28,21 @@ except ImportError:
     # faltantes) o no existe la carpeta, el scraping sigue funcionando igual;
     # solo --sync quedará inhabilitado y se avisa al usarlo.
     run_odoo_sync = None
+
+# --- Habilitar la extracción de materiales de Presupuesto en la misma corrida ---
+# Antes extraer_materiales_presupuesto.py era un script 100% aparte
+# (run_budget_materials.bat), sin ningún disparador automático ni Tarea
+# Programada propia — dependía de que alguien se acordara de correrlo a
+# mano. En la práctica nadie lo hizo desde el 24/06/2026 (~2 meses),
+# dejando desactualizada la tabla proyecto_producto_materiales. Se importa
+# acá directo (vive en esta misma carpeta, no hace falta tocar sys.path
+# como con Odoo) para poder encadenarlo con --presupuesto al final de una
+# corrida normal, igual que --sync.
+try:
+    from extraer_materiales_presupuesto import scrape_budget_materials
+except ImportError:
+    scrape_budget_materials = None
+
 from models import Proyecto, Producto, ProductoItem, Material
 from database import (
     init_db, iniciar_ejecucion, finalizar_ejecucion,
@@ -197,6 +212,11 @@ def main():
         "--sync",
         action="store_true",
         help="Ejecutar sincronización con Odoo al finalizar el scraping exitosamente."
+    )
+    parser.add_argument(
+        "--presupuesto",
+        action="store_true",
+        help="Ejecutar la extracción de materiales por producto (módulo de Presupuesto del ERP) al finalizar el scraping."
     )
     args = parser.parse_args()
 
@@ -433,6 +453,29 @@ def main():
                         logger.warning(f"⚠️  Sincronización con Odoo terminó con errores (código: {sync_exit_code})")
                 except Exception as sync_err:
                     logger.error(f"❌ Error al ejecutar sincronización con Odoo: {sync_err}", exc_info=True)
+
+        # --- Extracción de materiales de Presupuesto (si se solicitó con --presupuesto) ---
+        if args.presupuesto:
+            if scrape_budget_materials is None:
+                logger.warning(
+                    "⚠️  Extracción de Presupuesto solicitada (--presupuesto) pero no se pudo "
+                    "importar 'extraer_materiales_presupuesto'. Verificá que el archivo exista "
+                    "en scraper-fabricacion/."
+                )
+            else:
+                logger.info("Iniciando extracción de materiales de Presupuesto (--presupuesto activado)...")
+                try:
+                    # scrape_budget_materials() abre su propia sesión de Playwright,
+                    # su propia conexión SQLite (init_db la reutiliza sin problema —
+                    # es el mismo patrón que ya usaban main.py y
+                    # extraer_materiales_presupuesto.py por separado) y ya loguea
+                    # internamente su propio resumen de éxito/fallo (MATCH/MISS,
+                    # conteos) — acá solo se atrapa una excepción no manejada para
+                    # que un fallo en Presupuesto nunca tumbe la corrida principal,
+                    # que para este punto ya terminó y solo falta cerrar prolijo.
+                    scrape_budget_materials()
+                except Exception as presu_err:
+                    logger.error(f"❌ Error al ejecutar la extracción de Presupuesto: {presu_err}", exc_info=True)
 
     except Exception as err:
         estado_final = "parcial" if proyectos_procesados_totales > 0 else "error"

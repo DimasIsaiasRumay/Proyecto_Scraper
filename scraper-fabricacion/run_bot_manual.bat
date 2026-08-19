@@ -2,7 +2,7 @@
 title Scraper de Fabricacion - Ejecucion Manual
 echo ===================================================
 echo Iniciando Scraper de Fabricacion (Modo Manual)...
-echo Incluye scraping + sincronizacion con Odoo (--sync).
+echo Incluye scraping + sync con Odoo + materiales de Presupuesto.
 echo ===================================================
 cd /d "%~dp0"
 REM Preferir Python 3.10 (version de referencia en produccion). Si el launcher
@@ -14,7 +14,7 @@ if errorlevel 1 (
 ) else (
     set "PYRUN=py -3.10"
 )
-%PYRUN% main.py --force --sync
+%PYRUN% main.py --force --sync --presupuesto
 echo ===================================================
 echo Proceso finalizado.
 echo ===================================================

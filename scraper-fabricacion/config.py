@@ -40,6 +40,11 @@ if BASE_URL.endswith("/"):
 URL_LOGIN = f"{BASE_URL}/"
 URL_PROYECTOS = f"{BASE_URL}/proyecto_master_v16.html"
 URL_MATERIALES = f"{BASE_URL}/proyecto_master_material_logistica_v18.html"
+# Estaba hardcodeada inline en extraer_materiales_presupuesto.py, a diferencia
+# de las dos de arriba. Como el ERP versiona sus páginas en el nombre del
+# archivo (v16/v18/v19), tenerlas todas acá hace que un bump de versión sea
+# una línea en este archivo y no una búsqueda por el código.
+URL_PRESUPUESTO = f"{BASE_URL}/proyecto_master_presupuesto_v19.html"
 
 # Playwright
 HEADLESS = True
