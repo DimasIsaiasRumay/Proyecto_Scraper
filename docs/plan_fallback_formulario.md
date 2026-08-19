@@ -14,7 +14,7 @@
 |---|---|---|
 | 0 | Preparación (rama, baseline verde) | ✅ Hecho |
 | 1 | Quick win: sacar re-login redundante | ✅ Hecho |
-| 2 | Reconocimiento DOM comparado (solo lectura) | 🔄 Script listo, falta correrlo |
+| 2 | Reconocimiento DOM comparado (solo lectura) | ✅ Hecho |
 | 3 | Lector de campos agnóstico al tipo de elemento | ⬜ Pendiente |
 | 4 | Fallback en `extraer_materiales()` | ⬜ Pendiente |
 | 5 | Guardas anti-escritura | ⬜ Pendiente |
@@ -213,14 +213,104 @@ constancia de que abrir el formulario no dispara escrituras.
 > carga en los proyectos rotos, el plan se cancela y se escala el problema al
 > proveedor del ERP.
 
+### Resultado real (19/08/2026)
+
+Corrido con `explorar_formulario_edicion.py` sobre `OP-AMX-EMIX-070826-0001`
+(sano) y los 2 proyectos rotos. Volcados en
+`scripts/manual_exploration/output/` (gitignorado).
+
+**Paso 2.2 — el formulario SÍ carga en los 2 proyectos rotos**, confirmado por
+`#hdnItemsId`/`#hdnSuministrosId` poblados:
+
+| Proyecto | Items | Suministros |
+|---|---|---|
+| `OP-ING-EPLIQ-070826-0001` | 15 (`13568`–`13582`) | 0 (`hdnSuministrosId=""`) |
+| `OP_CLARO_Complemento COWRoja_2906261616` | 11 (`12977`–`12987`) | 39 (`12988`–`13026`) |
+
+**Paso 2.1 — la contradicción del plan queda resuelta, y es peor de lo
+previsto.** Comparación campo a campo (`OP-AMX-EMIX-070826-0001`, item
+`13562` y suministro `13566`):
+
+| Campo | ID en Detalle | ID en Formulario | Tag en Formulario | Diagnóstico |
+|---|---|---|---|---|
+| `cantidad` | `cant_{id}` | `cant_{id}` | `span` | igual |
+| `desperdicio_12` | `cant_desp_{id}` | `cant_desp_{id}` | `span` | igual |
+| `validacion_diseno` | `val_dis_{id}` | `val_dis_{id}` | **`input`** | mismo ID, tag distinto |
+| `stock_chapa_barras` | `stock_{id}` | `stock_{id}` | **`input`** | mismo ID, tag distinto |
+| `comprar` | `comprar_{id}` | `comprar_{id}` | `span` | igual |
+| `estado_compra` | `estado_compra_{id}` | `estado_compra_{id}` | **`select`** (disabled) | mismo ID, tag distinto |
+| `comentarios` | `comentario_{id}` | `comentario_{id}` | **`input`** | mismo ID, tag distinto |
+| **`precio_sw`** | `precio_actual_{id}` | **`precio_sw_{id}`** | `input` (disabled) | **ID distinto** |
+| **`precio_compra`** | `total_comprado_{id}` | **`precio_comprado_{id}`** | `input` | **ID distinto** |
+| **`orden_compra`** (solo suministro) | `orden_compra_{id}` (sin prefijo) | **`suministro_orden_compra_{id}`** | `input` | **gana prefijo que en Detalle no tiene** |
+| **`numero_factura`** (solo suministro) | `numero_factura_{id}` (sin prefijo) | **`suministro_numero_factura_{id}`** | `input` | **ídem** |
+| `proveedor` | `span` vacío (contenedor de dato) | `<a id="proveedor_{id}">` (ícono "Agregar Proveedor") | `a` | **mismo ID, significado distinto** — no es un campo de dato en Formulario |
+
+`orden_compra`/`numero_factura` para **items** (no suministros) sí mantienen
+el mismo ID sin prefijo en ambas vistas — el prefijo nuevo en Formulario solo
+aparece para la variante de suministro.
+
+**Consecuencia si `extraer_materiales_de_seccion()` se reusara tal cual sobre
+Formulario, sin remapeo de IDs:**
+
+- `precio_sw`, `precio_compra`, `orden_compra`/`numero_factura` de
+  suministros → el selector no resuelve ningún elemento → Playwright lanza
+  excepción → el material completo se descarta por el `try/except` de
+  `scraper.py:354` → **pérdida silenciosa de materiales enteros** (la corrida
+  reporta éxito con menos materiales de los reales).
+- `validacion_diseno`, `stock_chapa_barras`, `comentarios`, `estado_compra` →
+  el ID sí existe pero es `input`/`select` → `inner_text()` devuelve `""` →
+  **corrupción silenciosa de esos 4 campos** (el riesgo original previsto en
+  este plan).
+
+Confirma que la Fase 3 no es opcional y que necesita, además del lector
+agnóstico al tag, una **tabla de remapeo de IDs específica para Formulario**
+(no alcanza con `MATERIAL_ID_PATTERNS` tal cual — hace falta una variante o
+una función de resolución que sepa que `precio_sw`/`precio_compra`/
+`orden_compra`(suministro)/`numero_factura`(suministro) cambian de nombre
+según la vista).
+
+`proveedor` queda fuera de alcance por ahora: en Formulario ese ID ya no es
+un campo de dato sino el ícono de "Agregar Proveedor" — no hay forma de leer
+el proveedor real desde ahí sin abrir el modal (que sería interacción, no
+lectura). Como hoy ese campo viene casi siempre vacío en la BD (revisar
+conteo real en Fase 3), se documenta como limitación conocida y no como
+bloqueante.
+
+**Salida limpia:** verificado a mano por el usuario en la UI — sin cambios en
+los proyectos tocados.
+
 ---
 
-## Fase 3 — Lector de campos agnóstico al tipo de elemento
+## Fase 3 — Lector de campos agnóstico al tipo de elemento + remapeo de IDs
 
 **Objetivo:** que la extracción funcione con `<span>`, `<td>`, `<input>` o
-`<select>` sin duplicar la lógica ni corromper datos en silencio.
+`<select>` sin duplicar la lógica ni corromper datos en silencio, **y** que
+resuelva el ID correcto según la vista — el reconocimiento real de la Fase 2
+confirmó que no alcanza con cambiar solo el método de lectura.
 
 **Archivo:** [`scraper-fabricacion/scraper.py`](../scraper-fabricacion/scraper.py)
+
+### 3.1 — Tabla de remapeo de IDs (nueva, además del lector)
+
+Con los datos reales de la Fase 2: 4 de los 12 campos cambian de **nombre de
+ID**, no solo de tag, al pasar de Detalle a Formulario. `MATERIAL_ID_PATTERNS`
+está armado sobre los IDs de Detalle únicamente; hace falta una segunda tabla
+(o una función `_material_field_id_formulario()` con sus propias excepciones)
+que sepa:
+
+| Campo | Base en Detalle | Base en Formulario |
+|---|---|---|
+| `precio_sw` | `precio_actual` | `precio_sw` |
+| `precio_compra` | `total_comprado` | `precio_comprado` |
+| `orden_compra` (suministro) | sin prefijo | con prefijo `suministro_` |
+| `numero_factura` (suministro) | sin prefijo | con prefijo `suministro_` |
+
+El resto de los campos comparten ID entre ambas vistas y solo cambian de tag
+(cubierto por 3.2). `proveedor` queda fuera de alcance: en Formulario ese ID
+es el ícono "Agregar Proveedor", no un campo de dato — no se lee desde ahí.
+
+### 3.2 — Lector agnóstico al tipo de elemento
 
 Función nueva:
 
@@ -240,12 +330,17 @@ Reglas:
 - Elemento inexistente → devuelve `""` **y loguea un warning explícito** (para
   que un cambio de estructura del ERP no vuelva a pasar callado)
 
-`extraer_materiales_de_seccion()` pasa a usar este helper en vez de llamar
-`inner_text()` directo (`scraper.py:321`). El comportamiento sobre la vista
-`Visualizar Detalle` **no cambia**: los campos de texto siguen leyéndose igual.
+`extraer_materiales_de_seccion()` pasa a recibir un parámetro (p. ej.
+`vista: Literal["detalle", "formulario"]`) que decide qué tabla de IDs usar
+y llama a `_leer_valor_campo()` en vez de `inner_text()` directo
+(`scraper.py:321`). El comportamiento sobre la vista `Visualizar Detalle`
+**no cambia**: mismos IDs, mismo método de lectura, mismos resultados.
 
 **Aceptación:** una corrida normal sobre un proyecto sano produce **exactamente
-los mismos valores** que antes del cambio (comparación campo a campo contra la BD).
+los mismos valores** que antes del cambio (comparación campo a campo contra la
+BD). Sobre `OP-AMX-EMIX-070826-0001` sacado por la vía Formulario (forzada a
+mano para la prueba), los 12 campos coinciden con los que ya están en la BD
+para ese mismo proyecto extraído por Detalle en la corrida del 18/08.
 
 ---
 
