@@ -545,6 +545,18 @@ def extraer_materiales(page: Page, proyecto_nombre: str) -> List[Material]:
             )
     human_delay(1.0, 2.0)
 
+    # Fase 5 del plan (guardas anti-escritura): mientras se lee "Editar
+    # Formulario", se vigila que no aparezca ninguna request de escritura
+    # ADEMÁS de la que abre el formulario. Esa primera (el clic de
+    # _intentar_fallback_formulario) ya terminó y quedó fuera de esta
+    # ventana — es la única esperada, y la Fase 2 del plan ya comparó su
+    # respuesta contra la del endpoint de solo lectura sin encontrar
+    # evidencia de que persista nada. Cualquier POST/PUT/DELETE/PATCH que
+    # aparezca DESPUÉS, mientras solo se están leyendo campos, es indicio de
+    # algo no esperado (a diferencia del reconocimiento de la Fase 2, este
+    # monitor corre en cada corrida real, no solo en la exploración manual).
+    monitor_escrituras = _MonitorEscriturasFormulario(page) if vista == "formulario" else None
+
     # Obtener las listas de IDs de la fila
     hdn_items = page.locator("#hdnItemsId").get_attribute("value")
     hdn_suministros = page.locator("#hdnSuministrosId").get_attribute("value")
@@ -558,6 +570,28 @@ def extraer_materiales(page: Page, proyecto_nombre: str) -> List[Material]:
     # Procesar ambas secciones
     materiales.extend(extraer_materiales_de_seccion(page, item_ids, "item", proyecto_nombre, vista=vista))
     materiales.extend(extraer_materiales_de_seccion(page, suministro_ids, "suministro", proyecto_nombre, vista=vista))
+
+    if monitor_escrituras is not None:
+        monitor_escrituras.detener()
+        if monitor_escrituras.hubo_escrituras():
+            # Por precaución se descartan los materiales ya leídos: no hay
+            # forma de saber desde acá si la escritura detectada tocó (o no)
+            # los datos que se acaban de leer, así que no se puede confiar
+            # en ellos. El proyecto queda como fallido, igual que si
+            # "Editar Formulario" no hubiera cargado — main.py ya sabe
+            # reintentar y, si persiste, registrar el incidente.
+            logger.error(
+                f"Proyecto '{proyecto_nombre}': se detectó actividad de escritura "
+                f"inesperada mientras se leía 'Editar Formulario' (más allá de la "
+                f"apertura inicial, ya evidenciada como inofensiva en "
+                f"docs/plan_fallback_formulario.md Fase 2): "
+                f"{monitor_escrituras.reporte()}. Se descartan los {len(materiales)} "
+                f"material(es) recién leídos por precaución."
+            )
+            raise RuntimeError(
+                f"Actividad de escritura inesperada al leer 'Editar Formulario' "
+                f"para '{proyecto_nombre}'; ver el log de ERROR justo arriba."
+            )
 
     return materiales
 
@@ -612,3 +646,44 @@ def _intentar_fallback_formulario(page: Page, target_row: Locator, proyecto_nomb
         f"extraído vía 'Editar Formulario' (solo lectura) en su lugar."
     )
     return True
+
+
+class _MonitorEscriturasFormulario:
+    """Guarda de la Fase 5 (docs/plan_fallback_formulario.md): mientras
+    extraer_materiales() lee campos por la vía "Editar Formulario", vigila
+    la red por cualquier request de escritura que no sea la ya esperada
+    (la que abre el formulario, disparada por el clic en
+    _intentar_fallback_formulario — esa ya terminó y quedó fuera de la
+    ventana de este monitor porque se instancia después).
+
+    Solo lectura sobre el tráfico: un listener de `page.on("request")` no
+    intercepta ni cancela nada, solo observa lo que el navegador ya iba a
+    mandar de todas formas.
+    """
+
+    METODOS_ESCRITURA = {"POST", "PUT", "DELETE", "PATCH"}
+
+    def __init__(self, page: Page):
+        self.page = page
+        self.detectadas = []
+        page.on("request", self._on_request)
+
+    def _on_request(self, request):
+        if request.method in self.METODOS_ESCRITURA:
+            self.detectadas.append((request.method, request.url))
+
+    def detener(self):
+        try:
+            self.page.remove_listener("request", self._on_request)
+        except Exception:
+            # No debe poder tumbar la corrida por un detalle de limpieza
+            # del listener — en el peor caso queda un listener de más
+            # colgado hasta que cierre el browser, no una escritura sin
+            # detectar (el reporte ya se calculó con lo que había hasta acá).
+            pass
+
+    def hubo_escrituras(self) -> bool:
+        return bool(self.detectadas)
+
+    def reporte(self) -> str:
+        return "; ".join(f"{metodo} {url}" for metodo, url in self.detectadas)
