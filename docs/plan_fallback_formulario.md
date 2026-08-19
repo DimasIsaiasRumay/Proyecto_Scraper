@@ -18,8 +18,8 @@
 | 3 | Lector de campos agnóstico al tipo de elemento | ✅ Hecho |
 | 4 | Fallback en `extraer_materiales()` | ✅ Hecho |
 | 5 | Guardas anti-escritura | ✅ Hecho |
-| 6 | Validación en `--dry-run` contra el ERP | 🔄 Corrido, pendiente confirmación visual puntual |
-| 7 | Pruebas automáticas | ⬜ Pendiente |
+| 6 | Validación en `--dry-run` contra el ERP | ✅ Hecho |
+| 7 | Pruebas automáticas | ✅ Hecho |
 | 8 | Documentación | ⬜ Pendiente |
 | 9 | Corrida real sobre los 2 proyectos rotos | ⬜ Pendiente |
 
@@ -600,6 +600,12 @@ Pendiente para cerrar del todo la Fase 6: confirmación visual del usuario
 contra la UI del ERP (el caso de `MP_2133` puntualmente, más 2-3 filas al
 azar de `COWRoja` de control).
 
+**Confirmado por el usuario (19/08/2026):** capturas de pantalla de los 2
+proyectos completos en la UI del ERP. Todo coincide, incluido `MP_2133` —
+su celda de `Precio SW` está vacía también en la UI (confirma que
+`precio_sw=None` era el valor real del ERP, no un bug de extracción). Fase
+6 cerrada.
+
 ---
 
 ## Fase 7 — Pruebas automáticas
@@ -620,6 +626,19 @@ tocar el ERP ni la red):
 Además, la suite completa (`tests/`) debe seguir en verde.
 
 **Aceptación:** `python -m pytest tests/ -v` en verde, casos nuevos incluidos.
+
+### Resultado real (19/08/2026)
+
+Commit `b9a07b4`. Desviación menor respecto del plan: en vez de HTML de
+fixture tomado literal de los volcados de la Fase 2 (tienen datos reales de
+clientes, no se pueden versionar — quedan gitignorados), se construyeron
+dobles mínimos (`_FakePage`/`_FakeLocator`/`_FakeElement`) que implementan
+solo lo que `_leer_valor_campo()` usa de verdad — mismo criterio que el
+resto de la suite (`conftest.py`: "solo funciones puras, sin tocar el
+ERP"). 18 casos: los 5 de la tabla de arriba más cobertura completa del
+remapeo de IDs de `MATERIAL_ID_OVERRIDES_FORMULARIO` (los 4 campos, en
+ambas vistas, más casos de control). Suite completa: **78/78 passed** (60
+previos + 18 nuevos).
 
 ---
 
