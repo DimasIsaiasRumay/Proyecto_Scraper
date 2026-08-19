@@ -16,7 +16,7 @@
 | 1 | Quick win: sacar re-login redundante | ✅ Hecho |
 | 2 | Reconocimiento DOM comparado (solo lectura) | ✅ Hecho |
 | 3 | Lector de campos agnóstico al tipo de elemento | ✅ Hecho |
-| 4 | Fallback en `extraer_materiales()` | ⬜ Pendiente |
+| 4 | Fallback en `extraer_materiales()` | ✅ Hecho |
 | 5 | Guardas anti-escritura | ⬜ Pendiente |
 | 6 | Validación en `--dry-run` contra el ERP | ⬜ Pendiente |
 | 7 | Pruebas automáticas | ⬜ Pendiente |
@@ -473,6 +473,13 @@ Nunca debe quedar indistinguible de una extracción normal.
 
 **Aceptación:** los 2 proyectos rotos se extraen con materiales; los 23 sanos
 siguen usando el camino de siempre (verificable en el log).
+
+### Resultado real (19/08/2026)
+
+Commit `384f16e`. `_intentar_fallback_formulario()` agregada, insertada
+justo donde antes iba el `raise` directo tras agotar `MAX_INTENTOS_DETALLE`.
+Suite completa: 60/60 passed, sin tocar ningún camino existente. Falta la
+verificación en vivo contra el ERP (Fase 6, con `--dry-run-formulario`).
 
 ---
 
