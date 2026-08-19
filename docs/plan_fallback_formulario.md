@@ -14,7 +14,7 @@
 |---|---|---|
 | 0 | Preparación (rama, baseline verde) | ✅ Hecho |
 | 1 | Quick win: sacar re-login redundante | ✅ Hecho |
-| 2 | Reconocimiento DOM comparado (solo lectura) | ✅ Hecho |
+| 2 | Reconocimiento DOM comparado (solo lectura) | ⏸️ Bloqueado — ver hallazgo de red |
 | 3 | Lector de campos agnóstico al tipo de elemento | ⬜ Pendiente |
 | 4 | Fallback en `extraer_materiales()` | ⬜ Pendiente |
 | 5 | Guardas anti-escritura | ⬜ Pendiente |
@@ -277,8 +277,37 @@ lectura). Como hoy ese campo viene casi siempre vacío en la BD (revisar
 conteo real en Fase 3), se documenta como limitación conocida y no como
 bloqueante.
 
-**Salida limpia:** verificado a mano por el usuario en la UI — sin cambios en
-los proyectos tocados.
+### ⏸️ Hallazgo de red — bloquea el avance a Fase 3 hasta confirmar
+
+Salida real del `MonitorEscrituras` (19/08/2026), en los 3 proyectos:
+
+| Vista | Endpoint | Se disparó |
+|---|---|---|
+| `Visualizar Detalle` | `manage.do?do=visualizarProyectoMaterialLogisticaMaster` | sí (esperable — "visualizar" en el nombre) |
+| `Editar Formulario` | `manage.do?do=actualizarProyectoMaterialLogisticaMaster` | **sí, en los 3 proyectos** (sano + 2 rotos) |
+
+Solo con abrir `Editar Formulario` —sin tocar ningún campo, sin clicar
+"Guardar"— el JS propio del ERP dispara un POST a un endpoint llamado
+**"actualizar"**. El nombre del endpoint no prueba que persista algo (puede
+ser una convención de nombres floja del ERP que solo recalcula/refresca en
+memoria), pero tampoco se puede asumir lo contrario sin evidencia.
+
+**A favor de que sea inofensivo:** comparando valores campo a campo entre
+`Visualizar Detalle` (abierto primero) y `Editar Formulario` (abierto
+después) sobre `OP-AMX-EMIX-070826-0001`, los valores compartidos
+(`stock_chapa_barras=2`, `validacion_diseno=0.01`, `estado_compra=En Set IN`)
+son **idénticos** — si "actualizar" pisara datos con un default o los
+vaciara, se notaría ahí.
+
+**Pendiente antes de dar la Fase 2 por cerrada:** verificar a mano en la UI,
+sobre los 3 proyectos tocados por esta corrida (19/08/2026), que no cambió
+ningún valor ni fecha de última modificación respecto de antes de correr el
+script. La nota anterior de "salida limpia verificada" en este documento
+correspondía a una verificación manual **previa** a esta corrida del script
+(cuando el usuario entró a mano a probar el ícono) — no cubre esta ejecución
+automatizada, que es la que disparó el POST a "actualizar". Se corrige acá
+para no dar por buena una validación que no corresponde a lo que se está
+evaluando.
 
 ---
 
