@@ -336,8 +336,20 @@ def main():
                                 f"para '{proyecto.nombre}': {ex}. Reintentando en ~{espera:.0f}s..."
                             )
                             human_delay(espera, espera + 3.0)
+                            # Antes se hacía un login() completo acá (navegar a
+                            # login, tipear usuario/contraseña con delays
+                            # humanos, validar) — redundante: la sesión no se
+                            # perdió, solo el AJAX de #detalleProyecto no
+                            # respondió. check_session_and_relogin() ya valida
+                            # y reloguea si hiciera falta al tope del próximo
+                            # intento (línea de arriba), y extraer_materiales()
+                            # vuelve a hacer un page.goto(URL_MATERIALES) fresco
+                            # de entrada, que ya limpia cualquier
+                            # .jquery-loading-modal atascado. Alcanza con un
+                            # F5 (page.reload()), igual que se verificó a mano
+                            # en la UI: no hace falta volver a iniciar sesión.
                             try:
-                                login(page)
+                                page.reload(timeout=config.TIMEOUT_NAV)
                             except Exception:
                                 pass
                         else:

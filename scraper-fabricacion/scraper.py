@@ -281,29 +281,108 @@ MATERIAL_ID_PATTERNS = {
     "comentarios":       {"base": "comentario",       "prefixed": True,  "tipos": {"item", "suministro"}},
 }
 
+# Fase 3 del fallback a "Editar Formulario" (ver docs/plan_fallback_formulario.md).
+# MATERIAL_ID_PATTERNS está armado sobre los IDs de "Visualizar Detalle". El
+# reconocimiento en vivo contra el ERP real (Fase 2 del plan, reproducido en
+# los 3 proyectos comparados: el sano y los 2 rotos) confirmó que en "Editar
+# Formulario" 4 de esos 12 campos usan un ID DISTINTO, no solo un tag
+# distinto. Esta tabla registra SOLO las diferencias — cualquier campo que no
+# aparece acá comparte base/prefixed entre las dos vistas.
+MATERIAL_ID_OVERRIDES_FORMULARIO = {
+    "precio_sw":      {"base": "precio_sw"},       # detalle: precio_actual
+    "precio_compra":  {"base": "precio_comprado"}, # detalle: total_comprado
+    "orden_compra":   {"prefixed": True},           # detalle: sin prefijo, incluso en suministro
+    "numero_factura": {"prefixed": True},           # detalle: sin prefijo, incluso en suministro
+}
 
-def _material_field_id(campo: str, mid: str, tipo: str) -> str:
-    """Arma el selector #id real en el DOM para un campo de MATERIAL_ID_PATTERNS."""
-    spec = MATERIAL_ID_PATTERNS[campo]
+
+def _material_field_id(campo: str, mid: str, tipo: str, vista: str = "detalle") -> str:
+    """Arma el selector #id real en el DOM para un campo de MATERIAL_ID_PATTERNS.
+
+    `vista` distingue "detalle" (Visualizar Detalle, el camino normal) de
+    "formulario" (Editar Formulario, fallback de scraper.py:~448 cuando
+    Detalle no carga) — ver MATERIAL_ID_OVERRIDES_FORMULARIO arriba.
+    """
+    spec = dict(MATERIAL_ID_PATTERNS[campo])
+    if vista == "formulario" and campo in MATERIAL_ID_OVERRIDES_FORMULARIO:
+        spec.update(MATERIAL_ID_OVERRIDES_FORMULARIO[campo])
     pfx = "suministro_" if (spec["prefixed"] and tipo == "suministro") else ""
     return f"#{pfx}{spec['base']}_{mid}"
 
 
-def extraer_materiales_de_seccion(page: Page, ids: List[str], tipo: str, proyecto_nombre: str) -> List[Material]:
-    """Helper para extraer materiales (ítems o suministros) por sus IDs en el DOM."""
+def _leer_valor_campo(page: Page, selector: str) -> str:
+    """Lee el valor de un campo del ERP sin importar si es texto plano
+    (<span>/<td>), un <input>/<textarea> o un <select>.
+
+    Hace falta desde que "Editar Formulario" (fallback de "Visualizar
+    Detalle") resultó usar <input>/<select> para varios campos que en
+    Detalle son <span> de solo texto (verificado en vivo, Fase 2 de
+    docs/plan_fallback_formulario.md): inner_text() sobre un <input> siempre
+    devuelve "" sin lanzar excepción, lo que corrompería esos campos en
+    silencio (se guardarían como NULL en la BD) si no se distinguiera el tag.
+
+    Solo lectura: usa input_value()/inner_text(), nunca dispara eventos
+    onchange/onblur del JS del ERP.
+    """
+    loc = page.locator(selector)
+    if loc.count() == 0:
+        # A diferencia de antes (dejar que .inner_text() sobre un locator
+        # vacío tire un TimeoutError que descarta el material entero por el
+        # try/except de extraer_materiales_de_seccion), acá se degrada campo
+        # por campo: se guarda "" (-> None tras parse) pero el resto del
+        # material se conserva, y queda constancia explícita en el log de
+        # que ese campo puntual no resolvió.
+        logger.warning(f"_leer_valor_campo: selector '{selector}' no resolvió ningún elemento; se guarda vacío.")
+        return ""
+
+    tag = loc.first.evaluate("el => el.tagName")
+    if tag in ("INPUT", "TEXTAREA"):
+        return (loc.first.input_value() or "").strip()
+    if tag == "SELECT":
+        texto = loc.first.evaluate(
+            "el => el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : ''"
+        )
+        return (texto or "").strip()
+    return loc.first.inner_text().strip()
+
+
+def extraer_materiales_de_seccion(
+    page: Page, ids: List[str], tipo: str, proyecto_nombre: str, vista: str = "detalle"
+) -> List[Material]:
+    """Helper para extraer materiales (ítems o suministros) por sus IDs en el DOM.
+
+    `vista`: "detalle" (Visualizar Detalle, default) o "formulario" (Editar
+    Formulario, fallback). Ver MATERIAL_ID_OVERRIDES_FORMULARIO — 4 de los 12
+    campos resuelven a un ID distinto según la vista.
+    """
     materiales = []
     for mid in ids:
         mid = mid.strip()
         if not mid:
             continue
         try:
-            # Ubicar primer TD que contiene el código y descripción
-            td0 = page.locator(f"td:has({_material_field_id('proveedor', mid, tipo)})")
+            # Ubicar primer TD que contiene el código y descripción. El
+            # selector de "proveedor" está duplicado en el DOM de Formulario
+            # (aparece también, con el mismo id, en el ícono "Agregar
+            # Proveedor" de una columna posterior — verificado en vivo, Fase
+            # 2 del plan) pero al ser :has() + .first sobre orden del DOM,
+            # sigue resolviendo al primer <td> de la fila (el de la
+            # descripción), que es el que importa acá.
+            selector_proveedor = _material_field_id("proveedor", mid, tipo, vista=vista)
+            td0 = page.locator(f"td:has({selector_proveedor})")
             if td0.count() == 0:
                 continue
 
             # Extraer código y descripción del primer span en td0
             item_text = td0.locator("span").first.inner_text().strip()
+            # "Editar Formulario" envuelve el código+descripción entre
+            # paréntesis ("(MP_0042 - Perfil UPN100 )"), cosa que "Visualizar
+            # Detalle" no hace (verificado en vivo, Fase 2 del plan). Se
+            # recorta solo si están los dos paréntesis en los extremos, para
+            # no tocar un nombre de material que legítimamente empiece o
+            # termine con paréntesis en Detalle.
+            if item_text.startswith("(") and item_text.endswith(")"):
+                item_text = item_text[1:-1].strip()
             if " - " in item_text:
                 parts = item_text.split(" - ", 1)
                 codigo_mp = parts[0].strip()
@@ -318,7 +397,8 @@ def extraer_materiales_de_seccion(page: Page, ids: List[str], tipo: str, proyect
                 if tipo not in spec["tipos"]:
                     valores[campo] = None
                     continue
-                valores[campo] = page.locator(_material_field_id(campo, mid, tipo)).inner_text().strip()
+                selector = _material_field_id(campo, mid, tipo, vista=vista)
+                valores[campo] = _leer_valor_campo(page, selector)
 
             proveedor = valores["proveedor"]
             cantidad = valores["cantidad"]
@@ -422,6 +502,7 @@ def extraer_materiales(page: Page, proyecto_nombre: str) -> List[Material]:
     # siguientes ("subtree intercepts pointer events") — por eso reintentar
     # el clic sin más no alcanza: hay que limpiar el overlay atascado antes.
     MAX_INTENTOS_DETALLE = 2
+    detalle_cargo = False
     for intento_detalle in range(1, MAX_INTENTOS_DETALLE + 1):
         if intento_detalle > 1:
             # Limpiar cualquier modal de "cargando" que haya quedado
@@ -434,6 +515,7 @@ def extraer_materiales(page: Page, proyecto_nombre: str) -> List[Material]:
         logger.info(f"Esperando que cargue la sección de detalleProyecto (intento {intento_detalle}/{MAX_INTENTOS_DETALLE})...")
         try:
             page.wait_for_selector("#detalleProyecto table", timeout=TIMEOUT_ELEMENT)
+            detalle_cargo = True
             break
         except PlaywrightTimeoutError:
             if intento_detalle < MAX_INTENTOS_DETALLE:
@@ -442,22 +524,166 @@ def extraer_materiales(page: Page, proyecto_nombre: str) -> List[Material]:
                     f"{TIMEOUT_ELEMENT}ms (falla intermitente conocida del ERP). "
                     f"Reintentando el clic..."
                 )
-            else:
-                raise
+            # Antes acá iba un `else: raise` directo tras agotar los
+            # MAX_INTENTOS_DETALLE intentos. Ahora, antes de dar el proyecto
+            # por perdido, se prueba el fallback de "Editar Formulario" (ver
+            # _intentar_fallback_formulario y docs/plan_fallback_formulario.md
+            # Fase 4) — si tampoco carga, se sigue lanzando la misma
+            # excepción de siempre más abajo, así que el comportamiento para
+            # un ERP realmente caído no cambia.
+
+    vista = "detalle"
+    if not detalle_cargo:
+        if _intentar_fallback_formulario(page, target_row, proyecto_nombre):
+            detalle_cargo = True
+            vista = "formulario"
+        else:
+            raise PlaywrightTimeoutError(
+                f"Timeout esperando #detalleProyecto table para '{proyecto_nombre}' "
+                f"tras {MAX_INTENTOS_DETALLE} intentos de 'Visualizar Detalle' y el "
+                f"fallback a 'Editar Formulario'."
+            )
     human_delay(1.0, 2.0)
-    
+
+    # Fase 5 del plan (guardas anti-escritura): mientras se lee "Editar
+    # Formulario", se vigila que no aparezca ninguna request de escritura
+    # ADEMÁS de la que abre el formulario. Esa primera (el clic de
+    # _intentar_fallback_formulario) ya terminó y quedó fuera de esta
+    # ventana — es la única esperada, y la Fase 2 del plan ya comparó su
+    # respuesta contra la del endpoint de solo lectura sin encontrar
+    # evidencia de que persista nada. Cualquier POST/PUT/DELETE/PATCH que
+    # aparezca DESPUÉS, mientras solo se están leyendo campos, es indicio de
+    # algo no esperado (a diferencia del reconocimiento de la Fase 2, este
+    # monitor corre en cada corrida real, no solo en la exploración manual).
+    monitor_escrituras = _MonitorEscriturasFormulario(page) if vista == "formulario" else None
+
     # Obtener las listas de IDs de la fila
     hdn_items = page.locator("#hdnItemsId").get_attribute("value")
     hdn_suministros = page.locator("#hdnSuministrosId").get_attribute("value")
-    
+
     item_ids = [x.strip() for x in hdn_items.split(",") if x.strip()] if hdn_items else []
     suministro_ids = [x.strip() for x in hdn_suministros.split(",") if x.strip()] if hdn_suministros else []
-    
+
     logger.info(f"Proyecto '{proyecto_nombre}': {len(item_ids)} items, {len(suministro_ids)} suministros encontrados.")
-    
+
     materiales = []
     # Procesar ambas secciones
-    materiales.extend(extraer_materiales_de_seccion(page, item_ids, "item", proyecto_nombre))
-    materiales.extend(extraer_materiales_de_seccion(page, suministro_ids, "suministro", proyecto_nombre))
-    
+    materiales.extend(extraer_materiales_de_seccion(page, item_ids, "item", proyecto_nombre, vista=vista))
+    materiales.extend(extraer_materiales_de_seccion(page, suministro_ids, "suministro", proyecto_nombre, vista=vista))
+
+    if monitor_escrituras is not None:
+        monitor_escrituras.detener()
+        if monitor_escrituras.hubo_escrituras():
+            # Por precaución se descartan los materiales ya leídos: no hay
+            # forma de saber desde acá si la escritura detectada tocó (o no)
+            # los datos que se acaban de leer, así que no se puede confiar
+            # en ellos. El proyecto queda como fallido, igual que si
+            # "Editar Formulario" no hubiera cargado — main.py ya sabe
+            # reintentar y, si persiste, registrar el incidente.
+            logger.error(
+                f"Proyecto '{proyecto_nombre}': se detectó actividad de escritura "
+                f"inesperada mientras se leía 'Editar Formulario' (más allá de la "
+                f"apertura inicial, ya evidenciada como inofensiva en "
+                f"docs/plan_fallback_formulario.md Fase 2): "
+                f"{monitor_escrituras.reporte()}. Se descartan los {len(materiales)} "
+                f"material(es) recién leídos por precaución."
+            )
+            raise RuntimeError(
+                f"Actividad de escritura inesperada al leer 'Editar Formulario' "
+                f"para '{proyecto_nombre}'; ver el log de ERROR justo arriba."
+            )
+
     return materiales
+
+
+def _intentar_fallback_formulario(page: Page, target_row: Locator, proyecto_nombre: str) -> bool:
+    """Fallback de extraer_materiales() cuando 'Visualizar Detalle' se agota
+    tras MAX_INTENTOS_DETALLE intentos (ver el comentario sobre la falla
+    intermitente conocida del ERP, unas líneas más arriba). Abre 'Editar
+    Formulario' en su lugar.
+
+    SOLO LECTURA: nunca hace fill()/select_option()/check()/press() ni
+    clickea "Guardar" — el único click acá es para ABRIR el formulario, no
+    para modificarlo. Investigado en vivo contra el ERP real
+    (docs/plan_fallback_formulario.md, Fase 2): el endpoint que dispara este
+    ícono del lado del servidor se llama "actualizar..." (nombre engañoso),
+    pero comparado con el endpoint de solo lectura "visualizar...", ambos
+    devuelven la misma forma de respuesta (un fragmento HTML para inyectar
+    en '#detalleProyecto') sin ningún flag de éxito de guardado ni dato
+    persistido — no hay evidencia de que abrir el formulario escriba nada.
+
+    "Editar Formulario" comparte el mismo contenedor '#detalleProyecto
+    table' que "Visualizar Detalle" (verificado en vivo), así que no hace
+    falta un selector de espera distinto.
+
+    Devuelve True si el formulario cargó, False si también falló (en cuyo
+    caso el llamador sigue tratando el proyecto como fallido, igual que
+    antes de que existiera este fallback).
+    """
+    editar_btn = target_row.locator("img[title='Editar Formulario']")
+    if editar_btn.count() == 0:
+        logger.warning(
+            f"'{proyecto_nombre}': no se encontró el ícono 'Editar Formulario' "
+            f"para el fallback tras agotar 'Visualizar Detalle'."
+        )
+        return False
+
+    logger.warning(
+        f"'{proyecto_nombre}': 'Visualizar Detalle' no cargó tras los reintentos. "
+        f"Probando fallback de solo lectura vía 'Editar Formulario'..."
+    )
+    page.evaluate("document.querySelectorAll('.jquery-loading-modal').forEach(el => el.remove())")
+    human_delay(1.0, 2.0)
+    editar_btn.first.click()
+    try:
+        page.wait_for_selector("#detalleProyecto table", timeout=TIMEOUT_ELEMENT)
+    except PlaywrightTimeoutError:
+        logger.warning(f"'{proyecto_nombre}': el fallback a 'Editar Formulario' también agotó el timeout.")
+        return False
+
+    logger.warning(
+        f"Proyecto '{proyecto_nombre}': 'Visualizar Detalle' no estuvo disponible, "
+        f"extraído vía 'Editar Formulario' (solo lectura) en su lugar."
+    )
+    return True
+
+
+class _MonitorEscriturasFormulario:
+    """Guarda de la Fase 5 (docs/plan_fallback_formulario.md): mientras
+    extraer_materiales() lee campos por la vía "Editar Formulario", vigila
+    la red por cualquier request de escritura que no sea la ya esperada
+    (la que abre el formulario, disparada por el clic en
+    _intentar_fallback_formulario — esa ya terminó y quedó fuera de la
+    ventana de este monitor porque se instancia después).
+
+    Solo lectura sobre el tráfico: un listener de `page.on("request")` no
+    intercepta ni cancela nada, solo observa lo que el navegador ya iba a
+    mandar de todas formas.
+    """
+
+    METODOS_ESCRITURA = {"POST", "PUT", "DELETE", "PATCH"}
+
+    def __init__(self, page: Page):
+        self.page = page
+        self.detectadas = []
+        page.on("request", self._on_request)
+
+    def _on_request(self, request):
+        if request.method in self.METODOS_ESCRITURA:
+            self.detectadas.append((request.method, request.url))
+
+    def detener(self):
+        try:
+            self.page.remove_listener("request", self._on_request)
+        except Exception:
+            # No debe poder tumbar la corrida por un detalle de limpieza
+            # del listener — en el peor caso queda un listener de más
+            # colgado hasta que cierre el browser, no una escritura sin
+            # detectar (el reporte ya se calculó con lo que había hasta acá).
+            pass
+
+    def hubo_escrituras(self) -> bool:
+        return bool(self.detectadas)
+
+    def reporte(self) -> str:
+        return "; ".join(f"{metodo} {url}" for metodo, url in self.detectadas)

@@ -34,6 +34,11 @@ scraper-fabricacion/data/
 backup/
 export/
 
+# Volcados de reconocimiento del scraper (HTML del ERP en vivo con datos
+# reales de proyectos/materiales de clientes) — ver
+# scripts/manual_exploration/explorar_formulario_edicion.py
+scripts/manual_exploration/output/
+
 # Logs
 logs/
 *.log
