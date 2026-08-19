@@ -18,7 +18,7 @@
 | 3 | Lector de campos agnóstico al tipo de elemento | ✅ Hecho |
 | 4 | Fallback en `extraer_materiales()` | ✅ Hecho |
 | 5 | Guardas anti-escritura | ✅ Hecho |
-| 6 | Validación en `--dry-run` contra el ERP | 🔄 Script listo, falta correrlo |
+| 6 | Validación en `--dry-run` contra el ERP | 🔄 Corrido, pendiente confirmación visual puntual |
 | 7 | Pruebas automáticas | ⬜ Pendiente |
 | 8 | Documentación | ⬜ Pendiente |
 | 9 | Corrida real sobre los 2 proyectos rotos | ⬜ Pendiente |
@@ -569,6 +569,36 @@ UI muestra un valor, **el fallback no pasa**. Es exactamente el modo de falla
 silenciosa que el plan busca evitar.
 
 **Aceptación:** coincidencia 100 % entre lo logueado y la UI, verificada a mano.
+
+### Resultado real (19/08/2026)
+
+Corrido `validar_extraccion_formulario.py` sobre los 2 proyectos rotos, de
+punta a punta contra el ERP real (login → búsqueda → agotar 2 intentos de
+Detalle → fallback a Formulario → lectura de campos → sin guardar nada).
+
+- **Sin excepciones, sin ningún `[ERROR]` en el log** — el monitor de
+  escrituras de la Fase 5 no detectó actividad inesperada en ninguno de los
+  2 proyectos.
+- **Conteos exactos:** 15 items/0 suministros en `OP-ING-EPLIQ-070826-0001`
+  y 11 items/39 suministros en `COWRoja` — coincide con los
+  `hdnItemsId`/`hdnSuministrosId` ya vistos en la Fase 2.
+- **El caso más riesgoso del diseño (colisión de ID de `proveedor`) resolvió
+  bien con datos reales**, no solo en el caso vacío de la Fase 2: nombres
+  reales como `CARDALDA S A`, `COMERCIAL SIO SRL`, `BULONERIA ALFA`,
+  `LOS MOLINOS SRL`.
+- **Los 4 campos remapeados** (`precio_sw`, `precio_compra`,
+  `orden_compra`/`numero_factura` de suministros) trajeron valores reales
+  donde correspondía y `None` limpio donde el material aún no tiene compra
+  cargada — sin ningún patrón de vacío generalizado que indicara un ID mal
+  resuelto.
+- **Único punto abierto:** `MP_2133 - Caño Estructural Rectangular
+  200X100 X 4,75Mm` (en EPLIQ) salió con `precio_sw=None`, el único caso
+  así en toda la corrida — pendiente de que el usuario confirme contra la
+  UI si es un valor real ausente en el ERP o un caso a investigar.
+
+Pendiente para cerrar del todo la Fase 6: confirmación visual del usuario
+contra la UI del ERP (el caso de `MP_2133` puntualmente, más 2-3 filas al
+azar de `COWRoja` de control).
 
 ---
 
