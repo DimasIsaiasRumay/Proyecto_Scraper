@@ -12,8 +12,8 @@
 
 | Fase | Descripción | Estado |
 |---|---|---|
-| 0 | Preparación (rama, baseline verde) | ⬜ Pendiente |
-| 1 | Quick win: sacar re-login redundante | ⬜ Pendiente |
+| 0 | Preparación (rama, baseline verde) | ✅ Hecho |
+| 1 | Quick win: sacar re-login redundante | ✅ Hecho |
 | 2 | Reconocimiento DOM comparado (solo lectura) | ⬜ Pendiente |
 | 3 | Lector de campos agnóstico al tipo de elemento | ⬜ Pendiente |
 | 4 | Fallback en `extraer_materiales()` | ⬜ Pendiente |
@@ -139,6 +139,16 @@ eliminarlo. Se opta por `page.reload()` para conservar el gesto explícito de
 **Aceptación:** el log de una corrida de prueba ya no muestra
 `Intentando iniciar sesión...` entre reintentos de un mismo proyecto; la sesión
 se mantiene y el proyecto se procesa igual.
+
+### Resultado real (19/08/2026)
+
+Cambio aplicado en `main.py:339-354` — se reemplazó `login(page)` por
+`page.reload(timeout=config.TIMEOUT_NAV)` dentro del mismo `try/except`, con
+comentario explicando por qué es seguro (mismo razonamiento de la sección de
+arriba). Suite completa: **60/60 passed**. `login` sigue importado y en uso
+(login inicial de la corrida, línea 267). Aún no verificado en una corrida real
+contra el ERP — queda pendiente de observar en la Fase 9, cuando se corra sobre
+los proyectos rotos.
 
 ---
 
