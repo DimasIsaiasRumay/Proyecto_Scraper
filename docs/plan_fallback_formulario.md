@@ -14,7 +14,7 @@
 |---|---|---|
 | 0 | Preparación (rama, baseline verde) | ✅ Hecho |
 | 1 | Quick win: sacar re-login redundante | ✅ Hecho |
-| 2 | Reconocimiento DOM comparado (solo lectura) | ⬜ Pendiente |
+| 2 | Reconocimiento DOM comparado (solo lectura) | 🔄 Script listo, falta correrlo |
 | 3 | Lector de campos agnóstico al tipo de elemento | ⬜ Pendiente |
 | 4 | Fallback en `extraer_materiales()` | ⬜ Pendiente |
 | 5 | Guardas anti-escritura | ⬜ Pendiente |
