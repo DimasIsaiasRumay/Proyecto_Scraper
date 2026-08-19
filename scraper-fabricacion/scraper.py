@@ -281,29 +281,108 @@ MATERIAL_ID_PATTERNS = {
     "comentarios":       {"base": "comentario",       "prefixed": True,  "tipos": {"item", "suministro"}},
 }
 
+# Fase 3 del fallback a "Editar Formulario" (ver docs/plan_fallback_formulario.md).
+# MATERIAL_ID_PATTERNS está armado sobre los IDs de "Visualizar Detalle". El
+# reconocimiento en vivo contra el ERP real (Fase 2 del plan, reproducido en
+# los 3 proyectos comparados: el sano y los 2 rotos) confirmó que en "Editar
+# Formulario" 4 de esos 12 campos usan un ID DISTINTO, no solo un tag
+# distinto. Esta tabla registra SOLO las diferencias — cualquier campo que no
+# aparece acá comparte base/prefixed entre las dos vistas.
+MATERIAL_ID_OVERRIDES_FORMULARIO = {
+    "precio_sw":      {"base": "precio_sw"},       # detalle: precio_actual
+    "precio_compra":  {"base": "precio_comprado"}, # detalle: total_comprado
+    "orden_compra":   {"prefixed": True},           # detalle: sin prefijo, incluso en suministro
+    "numero_factura": {"prefixed": True},           # detalle: sin prefijo, incluso en suministro
+}
 
-def _material_field_id(campo: str, mid: str, tipo: str) -> str:
-    """Arma el selector #id real en el DOM para un campo de MATERIAL_ID_PATTERNS."""
-    spec = MATERIAL_ID_PATTERNS[campo]
+
+def _material_field_id(campo: str, mid: str, tipo: str, vista: str = "detalle") -> str:
+    """Arma el selector #id real en el DOM para un campo de MATERIAL_ID_PATTERNS.
+
+    `vista` distingue "detalle" (Visualizar Detalle, el camino normal) de
+    "formulario" (Editar Formulario, fallback de scraper.py:~448 cuando
+    Detalle no carga) — ver MATERIAL_ID_OVERRIDES_FORMULARIO arriba.
+    """
+    spec = dict(MATERIAL_ID_PATTERNS[campo])
+    if vista == "formulario" and campo in MATERIAL_ID_OVERRIDES_FORMULARIO:
+        spec.update(MATERIAL_ID_OVERRIDES_FORMULARIO[campo])
     pfx = "suministro_" if (spec["prefixed"] and tipo == "suministro") else ""
     return f"#{pfx}{spec['base']}_{mid}"
 
 
-def extraer_materiales_de_seccion(page: Page, ids: List[str], tipo: str, proyecto_nombre: str) -> List[Material]:
-    """Helper para extraer materiales (ítems o suministros) por sus IDs en el DOM."""
+def _leer_valor_campo(page: Page, selector: str) -> str:
+    """Lee el valor de un campo del ERP sin importar si es texto plano
+    (<span>/<td>), un <input>/<textarea> o un <select>.
+
+    Hace falta desde que "Editar Formulario" (fallback de "Visualizar
+    Detalle") resultó usar <input>/<select> para varios campos que en
+    Detalle son <span> de solo texto (verificado en vivo, Fase 2 de
+    docs/plan_fallback_formulario.md): inner_text() sobre un <input> siempre
+    devuelve "" sin lanzar excepción, lo que corrompería esos campos en
+    silencio (se guardarían como NULL en la BD) si no se distinguiera el tag.
+
+    Solo lectura: usa input_value()/inner_text(), nunca dispara eventos
+    onchange/onblur del JS del ERP.
+    """
+    loc = page.locator(selector)
+    if loc.count() == 0:
+        # A diferencia de antes (dejar que .inner_text() sobre un locator
+        # vacío tire un TimeoutError que descarta el material entero por el
+        # try/except de extraer_materiales_de_seccion), acá se degrada campo
+        # por campo: se guarda "" (-> None tras parse) pero el resto del
+        # material se conserva, y queda constancia explícita en el log de
+        # que ese campo puntual no resolvió.
+        logger.warning(f"_leer_valor_campo: selector '{selector}' no resolvió ningún elemento; se guarda vacío.")
+        return ""
+
+    tag = loc.first.evaluate("el => el.tagName")
+    if tag in ("INPUT", "TEXTAREA"):
+        return (loc.first.input_value() or "").strip()
+    if tag == "SELECT":
+        texto = loc.first.evaluate(
+            "el => el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : ''"
+        )
+        return (texto or "").strip()
+    return loc.first.inner_text().strip()
+
+
+def extraer_materiales_de_seccion(
+    page: Page, ids: List[str], tipo: str, proyecto_nombre: str, vista: str = "detalle"
+) -> List[Material]:
+    """Helper para extraer materiales (ítems o suministros) por sus IDs en el DOM.
+
+    `vista`: "detalle" (Visualizar Detalle, default) o "formulario" (Editar
+    Formulario, fallback). Ver MATERIAL_ID_OVERRIDES_FORMULARIO — 4 de los 12
+    campos resuelven a un ID distinto según la vista.
+    """
     materiales = []
     for mid in ids:
         mid = mid.strip()
         if not mid:
             continue
         try:
-            # Ubicar primer TD que contiene el código y descripción
-            td0 = page.locator(f"td:has({_material_field_id('proveedor', mid, tipo)})")
+            # Ubicar primer TD que contiene el código y descripción. El
+            # selector de "proveedor" está duplicado en el DOM de Formulario
+            # (aparece también, con el mismo id, en el ícono "Agregar
+            # Proveedor" de una columna posterior — verificado en vivo, Fase
+            # 2 del plan) pero al ser :has() + .first sobre orden del DOM,
+            # sigue resolviendo al primer <td> de la fila (el de la
+            # descripción), que es el que importa acá.
+            selector_proveedor = _material_field_id("proveedor", mid, tipo, vista=vista)
+            td0 = page.locator(f"td:has({selector_proveedor})")
             if td0.count() == 0:
                 continue
 
             # Extraer código y descripción del primer span en td0
             item_text = td0.locator("span").first.inner_text().strip()
+            # "Editar Formulario" envuelve el código+descripción entre
+            # paréntesis ("(MP_0042 - Perfil UPN100 )"), cosa que "Visualizar
+            # Detalle" no hace (verificado en vivo, Fase 2 del plan). Se
+            # recorta solo si están los dos paréntesis en los extremos, para
+            # no tocar un nombre de material que legítimamente empiece o
+            # termine con paréntesis en Detalle.
+            if item_text.startswith("(") and item_text.endswith(")"):
+                item_text = item_text[1:-1].strip()
             if " - " in item_text:
                 parts = item_text.split(" - ", 1)
                 codigo_mp = parts[0].strip()
@@ -318,7 +397,8 @@ def extraer_materiales_de_seccion(page: Page, ids: List[str], tipo: str, proyect
                 if tipo not in spec["tipos"]:
                     valores[campo] = None
                     continue
-                valores[campo] = page.locator(_material_field_id(campo, mid, tipo)).inner_text().strip()
+                selector = _material_field_id(campo, mid, tipo, vista=vista)
+                valores[campo] = _leer_valor_campo(page, selector)
 
             proveedor = valores["proveedor"]
             cantidad = valores["cantidad"]
