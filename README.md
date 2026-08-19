@@ -327,10 +327,19 @@ flowchart TD
     Dado que la cuenta de diseño es compartida, el bot ejecuta `check_session_and_relogin(page)` antes de procesar cada proyecto. Si es expulsado, realiza la re-autenticación de inmediato sin romper el ciclo.
 
 4.  **Tolerancia a Fallos (Checkpoints y Reintentos):**
-    *   Máximo de **3 reintentos** ante errores transitorios (`PlaywrightTimeoutError`), con **backoff exponencial** (~5s, ~10s, ~20s). Errores permanentes se loguean con traceback completo y no se reintentan.
+    *   Máximo de **3 reintentos** ante errores transitorios (`PlaywrightTimeoutError`), con **backoff exponencial** (~5s, ~10s, ~20s), refrescando la página (`page.reload()`) entre intento e intento — no hace falta volver a iniciar sesión, la sesión se mantiene. Errores permanentes se loguean con traceback completo y no se reintentan.
     *   Fila de checkpoint tras cada proyecto procesado exitosamente para reanudar ante apagados abruptos.
 
-5.  **Herramienta complementaria — Materiales por Producto (`extraer_materiales_presupuesto.py`):**  
+5.  **Fallback a "Editar Formulario" cuando "Visualizar Detalle" no carga:**  
+    Ciertos proyectos disparan una falla intermitente conocida del ERP: la sección de detalle de materiales (`#detalleProyecto`) no responde tras agotar los reintentos del punto anterior — visto en producción por primera vez el 18/08/2026 y documentado en detalle, con la investigación completa contra el ERP real, en [`docs/plan_fallback_formulario.md`](docs/plan_fallback_formulario.md).
+
+    > ⚠️ **Solo lectura.** El fallback abre la pantalla "Editar Formulario" del ERP únicamente para leer los mismos campos que "Visualizar Detalle" —nunca hace `fill()`, `select_option()`, `check()`, `press()` ni clickea "Guardar"—. Además corre un monitor de red (`page.on("request")`) mientras se leen los campos: si aparece cualquier `POST`/`PUT`/`DELETE`/`PATCH` inesperado, descarta lo leído y marca el proyecto como fallido en vez de arriesgar un dato incorrecto.
+
+    *   **Por qué hace falta un lector propio de campos:** "Editar Formulario" muestra varios campos como `<input>`/`<select>` en vez del `<span>` de solo texto que usa "Visualizar Detalle" — leer con `inner_text()` sin más devuelve `""` en silencio sobre un `<input>`. `_leer_valor_campo()` distingue el tipo de elemento y usa `input_value()` o el texto de la opción seleccionada según corresponda.
+    *   **Por qué hace falta remapeo de IDs:** 4 de los 12 campos de materiales (`precio_sw`, `precio_compra`, y `orden_compra`/`numero_factura` de suministros) usan un `id` de DOM **distinto** entre las dos vistas, no solo un tag distinto — verificado en vivo contra el ERP real. `MATERIAL_ID_OVERRIDES_FORMULARIO` registra esas 4 diferencias.
+    *   **Validado end-to-end contra el ERP real** (19/08/2026) sobre los 2 proyectos que venían fallando: extracción completa sin excepciones, sin actividad de escritura detectada, y coincidencia campo a campo confirmada a mano contra la UI.
+
+6.  **Herramienta complementaria — Materiales por Producto (`extraer_materiales_presupuesto.py`):**  
     Desglosa materiales por producto y captura dimensiones de cada pieza desde la sección Presupuesto del ERP.
 
 ---
@@ -477,11 +486,12 @@ Desde la raíz del proyecto:
 pip install -r requirements-dev.txt
 pytest
 ```
-La suite (`tests/`) corre en menos de un segundo (60 tests) y no hace ninguna llamada de red al ERP ni a Odoo — valida:
+La suite (`tests/`) corre en menos de un segundo (78 tests) y no hace ninguna llamada de red al ERP ni a Odoo — valida:
 *   Funciones puras de parseo (`tests/test_parsing.py`).
 *   Validación `__post_init__` de los dataclasses del scraper (`tests/test_models.py`).
 *   Saneo de nombres, armado de payloads y resolución de ubicaciones de Odoo (`tests/test_odoo_locations.py`).
 *   Lógica de selección y ordenamiento de proyectos por corrida en SQLite (`tests/test_run_selection.py`).
+*   Lector agnóstico de campos y remapeo de IDs del fallback a "Editar Formulario" (`tests/test_lectura_campos.py`).
 
 **No requiere `.env` ni navegador instalado:** corre tal cual en un clon recién hecho y en CI.
 
@@ -500,6 +510,8 @@ Para programar la ejecución en segundo plano sin intervención humana:
 Cuando ocurran incidentes, verificar las siguientes fuentes en orden:
 
 1.  **`scraper-fabricacion/logs/scraper.log`:** Contiene las trazas detalladas de navegación, fallas de login o caída de selectores del portal del ERP.
+    *   Buscar `extraído vía 'Editar Formulario'` para ver qué proyectos usaron el fallback de solo lectura (ver punto 5 de la sección 5, arriba) en vez de "Visualizar Detalle".
+    *   Un `[ERROR]` con `se detectó actividad de escritura inesperada` indica que el monitor de red del fallback descartó materiales por precaución — revisar ese proyecto a mano en el ERP.
 2.  **`odoo-integration/logs/odoo_sync.log`:** Contiene las respuestas HTTP y el estado de la comunicación por API con el servidor de Odoo.
 3.  **Consulta SQL sobre `fabricacion.db`:**
     *   Para ver ejecuciones fallidas del scraper:
