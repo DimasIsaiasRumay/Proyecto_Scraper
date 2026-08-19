@@ -17,7 +17,7 @@
 | 2 | Reconocimiento DOM comparado (solo lectura) | ✅ Hecho |
 | 3 | Lector de campos agnóstico al tipo de elemento | ✅ Hecho |
 | 4 | Fallback en `extraer_materiales()` | ✅ Hecho |
-| 5 | Guardas anti-escritura | ⬜ Pendiente |
+| 5 | Guardas anti-escritura | ✅ Hecho |
 | 6 | Validación en `--dry-run` contra el ERP | ⬜ Pendiente |
 | 7 | Pruebas automáticas | ⬜ Pendiente |
 | 8 | Documentación | ⬜ Pendiente |
@@ -508,6 +508,28 @@ Medidas concretas:
 **Aceptación:** revisión de código confirma que no existe ninguna llamada de
 escritura de Playwright dentro de la rama; el detector no registra `POST` durante
 una corrida completa.
+
+### Resultado real (19/08/2026)
+
+Commit `abab1b7`. `_MonitorEscriturasFormulario` agregada: se instancia
+justo después de que "Editar Formulario" ya cargó (así que el POST inicial
+que lo abre, ya evidenciado como inofensivo en la Fase 2, queda fuera de la
+ventana vigilada) y corre mientras se leen los campos. Si detecta cualquier
+`POST`/`PUT`/`DELETE`/`PATCH` en esa ventana, loguea `ERROR` y descarta los
+materiales recién leídos por precaución (`RuntimeError` → el proyecto queda
+como fallido, igual que cualquier otro error transitorio).
+
+- **Salida limpia:** ya garantizada por la estructura existente — cada
+  llamada a `extraer_materiales()` arranca con `page.goto(URL_MATERIALES)`;
+  no hay ningún `go_back()` en todo `scraper.py`. No hizo falta código nuevo.
+- **Revisión de código:** los únicos `fill()`/`select_option()` del archivo
+  están en `login()` (usuario/contraseña) y en el formulario de búsqueda
+  (`#estado_proyecto`, `#nombre`) — ninguno dentro de la lectura del
+  formulario de edición. Cero llamadas de escritura en la rama del fallback.
+
+Verificado offline (sin tocar el ERP) con un `FakePage`: sin escrituras, con
+escritura inesperada, y que `detener()` de verdad saca el listener. Suite
+completa: 60/60 passed.
 
 ---
 
