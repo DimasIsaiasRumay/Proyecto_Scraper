@@ -93,25 +93,24 @@ def scrape_budget_materials():
             # script igual termina logueando "Extracción finalizada con éxito"
             # — falla silenciosa.
             #
-            # Tampoco alcanza con un wait_for_selector("#tablaTree tbody tr") a
-            # secas: retorna apenas aparece la PRIMERA fila, con las otras
-            # 14.000 todavía renderizando, y sería peor que la espera fija.
+            # Tampoco sirve wait_for_selector(), ni con state="attached" (ambas
+            # variantes probadas en vivo el 19/08/2026: las dos agotan el
+            # timeout aunque las filas YA estén en el DOM). El motivo está en
+            # los tiempos de la corrida que sí funcionaba: el page.evaluate()
+            # de la extracción tardaba 17,8s en devolver, cuando un
+            # querySelectorAll sobre 14.000 filas se resuelve en milisegundos.
+            # Eso indica que el hilo principal del navegador queda bloqueado
+            # renderizando el treetable — y wait_for_selector hace su polling
+            # DENTRO de la página, así que esos callbacks nunca llegan a
+            # correr y agota el timeout sin poder comprobar nada. El sleep
+            # ciego "funcionaba" justamente porque no dependía del hilo.
             #
-            # Por eso: se espera la primera fila (falla rápido y explícito si
-            # el listado nunca carga) y después se sondea el conteo hasta que
-            # se estabilice, que es la señal real de "terminó de renderizar".
+            # Por eso se sondea con page.evaluate(): misma primitiva que usa
+            # la extracción de más abajo, que sí se encola y devuelve cuando
+            # el hilo se libera. Se espera a que el conteo se estabilice, que
+            # es la señal real de "terminó de renderizar".
             logger.info("Esperando que cargue el listado...")
-            try:
-                page.wait_for_selector("#tablaTree tbody tr", timeout=config.TIMEOUT_ELEMENT)
-            except Exception:
-                logger.error(
-                    "El listado de presupuesto no devolvió ninguna fila en "
-                    f"{config.TIMEOUT_ELEMENT}ms. Se aborta sin guardar nada, en vez de "
-                    "seguir y reportar 0 coincidencias como si fuera una corrida exitosa."
-                )
-                return
-
-            ESPERA_MAX_SEGUNDOS = 90
+            ESPERA_MAX_SEGUNDOS = 120
             SONDEOS_ESTABLES_REQUERIDOS = 3
             filas_previas = -1
             sondeos_estables = 0
@@ -120,7 +119,10 @@ def scrape_budget_materials():
                 filas_actuales = page.evaluate(
                     "() => document.querySelectorAll('#tablaTree tbody tr').length"
                 )
-                if filas_actuales == filas_previas:
+                # Un conteo de 0 estable NO es "terminó de cargar" sino "no
+                # cargó todavía" (o no cargó nunca): se sigue sondeando hasta
+                # el tope, y si nunca aparece nada se aborta más abajo.
+                if filas_actuales == filas_previas and filas_actuales > 0:
                     sondeos_estables += 1
                     if sondeos_estables >= SONDEOS_ESTABLES_REQUERIDOS:
                         break
@@ -129,11 +131,21 @@ def scrape_budget_materials():
                     filas_previas = filas_actuales
                 human_delay(1.0, 1.0)
             else:
-                logger.warning(
-                    f"El listado siguió creciendo tras {ESPERA_MAX_SEGUNDOS}s "
-                    f"({filas_previas} filas hasta ahora). Se continúa igual, pero el "
-                    f"resultado podría estar incompleto."
+                if filas_previas > 0:
+                    logger.warning(
+                        f"El listado siguió creciendo tras {ESPERA_MAX_SEGUNDOS}s "
+                        f"({filas_previas} filas hasta ahora). Se continúa igual, pero el "
+                        f"resultado podría estar incompleto."
+                    )
+
+            if filas_previas <= 0:
+                logger.error(
+                    f"El listado de presupuesto no devolvió ninguna fila tras "
+                    f"{ESPERA_MAX_SEGUNDOS}s. Se aborta sin guardar nada, en vez de seguir "
+                    f"y reportar 0 coincidencias como si fuera una corrida exitosa."
                 )
+                return
+
             logger.info(f"Listado estabilizado en {filas_previas} filas.")
 
             logger.info("Extrayendo datos de la tabla mediante evaluación JS (Optimizado)...")
