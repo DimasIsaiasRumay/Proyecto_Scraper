@@ -20,7 +20,7 @@
 | 5 | Guardas anti-escritura | ✅ Hecho |
 | 6 | Validación en `--dry-run` contra el ERP | ✅ Hecho |
 | 7 | Pruebas automáticas | ✅ Hecho |
-| 8 | Documentación | ⬜ Pendiente |
+| 8 | Documentación | ✅ Hecho |
 | 9 | Corrida real sobre los 2 proyectos rotos | ⬜ Pendiente |
 
 Marcadores: ⬜ Pendiente · 🔄 En curso · ✅ Hecho · ⏸️ Bloqueado
@@ -650,6 +650,16 @@ previos + 18 nuevos).
    `plan_stock_locations.md`).
 3. Registrar en el plan la tabla de reconocimiento de la Fase 2, para que si el
    ERP cambia se pueda comparar contra la referencia.
+
+### Resultado real (19/08/2026)
+
+Commit `9dd5556`. `README.md` actualizado: nuevo punto en la sección 5 (Bot
+Scraper) con la advertencia de solo lectura en un blockquote bien visible,
+sección de Tests actualizada (60 → 78), y guía de logs para identificar
+proyectos extraídos por el fallback o descartados por el monitor de
+escrituras. La tabla de reconocimiento de la Fase 2 ya quedó registrada en
+ese momento (punto 3 ya cubierto). Sin cambios de código; suite sin tocar,
+78/78 passed.
 
 ---
 
