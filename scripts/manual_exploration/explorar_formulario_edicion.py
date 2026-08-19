@@ -21,7 +21,12 @@ elemento (Fase 3 del plan).
 También vigila la red mientras el formulario está abierto: si el ERP dispara
 un POST/PUT/DELETE al abrir o mientras se lee el formulario, lo reporta como
 ADVERTENCIA — sería indicio de que "solo abrir" el formulario ya escribe
-algo, y el plan se frena ahí (ver Fase 2, "Punto de decisión").
+algo, y el plan se frena ahí (ver Fase 2, "Punto de decisión"). Además, para
+cada una de esas requests, lee y muestra el cuerpo de la RESPUESTA del
+servidor (solo lectura — `response.text()` no reintenta ni modifica nada):
+si el ERP devuelve el registro ya persistido o un flag de éxito de guardado,
+eso es evidencia directa de si "actualizar..." escribe de verdad o si el
+nombre del endpoint es solo una convención floja del ERP para "refrescar".
 
 Uso:
     python explorar_formulario_edicion.py
@@ -88,11 +93,33 @@ class MonitorEscrituras:
     def __init__(self, page: Page):
         self.page = page
         self.detectadas = []
+        self.respuestas = []  # (metodo, url, status, body_truncado)
+        self._tareas_pendientes = []
         page.on("request", self._on_request)
+        page.on("response", self._on_response)
 
     def _on_request(self, request):
         if request.method in METODOS_ESCRITURA:
             self.detectadas.append((request.method, request.url))
+
+    def _on_response(self, response):
+        # No se puede await dentro de un handler síncrono de Playwright:
+        # se agenda la lectura del body como tarea aparte y se espera al
+        # cierre (ver `esperar_respuestas`). Es solo lectura — response.text()
+        # no reintenta ni modifica nada, solo lee lo que el server ya mandó.
+        if response.request.method in METODOS_ESCRITURA:
+            self._tareas_pendientes.append(asyncio.ensure_future(self._leer_body(response)))
+
+    async def _leer_body(self, response):
+        try:
+            body = await response.text()
+        except Exception as e:
+            body = f"<no se pudo leer el body: {e}>"
+        self.respuestas.append((response.request.method, response.url, response.status, body[:1500]))
+
+    async def esperar_respuestas(self):
+        if self._tareas_pendientes:
+            await asyncio.gather(*self._tareas_pendientes, return_exceptions=True)
 
     def reporte(self) -> str:
         if not self.detectadas:
@@ -100,6 +127,11 @@ class MonitorEscrituras:
         lineas = [f"⚠️  {len(self.detectadas)} request(s) de escritura detectada(s):"]
         for metodo, url in self.detectadas:
             lineas.append(f"    {metodo} {url}")
+        if self.respuestas:
+            lineas.append("  Respuestas del servidor para esas requests (primeros 1500 chars):")
+            for metodo, url, status, body in self.respuestas:
+                lineas.append(f"    [{status}] {metodo} {url}")
+                lineas.append(f"      body: {body!r}")
         return "\n".join(lineas)
 
 
@@ -281,6 +313,7 @@ async def explorar_proyecto_sano(page: Page, proyecto_nombre: str):
     await page.wait_for_selector("#detalleProyecto table", timeout=config.TIMEOUT_ELEMENT)
     resultado_detalle = await _volcar_vista(page, proyecto_nombre, "detalle")
     _imprimir_tabla_campos(resultado_detalle)
+    await monitor_detalle.esperar_respuestas()
     print(f"  Red durante 'Visualizar Detalle': {monitor_detalle.reporte()}")
 
     # Salida limpia: goto fresco, nunca go_back() (riesgo de autosave al
@@ -317,6 +350,7 @@ async def explorar_proyecto_sano(page: Page, proyecto_nombre: str):
 
     resultado_form = await _volcar_vista(page, proyecto_nombre, "formulario")
     _imprimir_tabla_campos(resultado_form)
+    await monitor_form.esperar_respuestas()
     print(f"  Red durante 'Editar Formulario': {monitor_form.reporte()}")
 
     # --- Comparación campo a campo ---
@@ -369,6 +403,7 @@ async def explorar_proyecto_roto(page: Page, proyecto_nombre: str):
         _imprimir_tabla_campos(resultado)
     except Exception as e:
         print(f"❌ 'Editar Formulario' TAMPOCO cargó para '{proyecto_nombre}': {e}")
+    await monitor_form.esperar_respuestas()
     print(f"  Red durante el intento: {monitor_form.reporte()}")
 
     # Salida limpia.
