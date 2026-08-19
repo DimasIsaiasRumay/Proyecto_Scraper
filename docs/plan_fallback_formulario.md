@@ -15,7 +15,7 @@
 | 0 | Preparación (rama, baseline verde) | ✅ Hecho |
 | 1 | Quick win: sacar re-login redundante | ✅ Hecho |
 | 2 | Reconocimiento DOM comparado (solo lectura) | ✅ Hecho |
-| 3 | Lector de campos agnóstico al tipo de elemento | ⬜ Pendiente |
+| 3 | Lector de campos agnóstico al tipo de elemento | ✅ Hecho |
 | 4 | Fallback en `extraer_materiales()` | ⬜ Pendiente |
 | 5 | Guardas anti-escritura | ⬜ Pendiente |
 | 6 | Validación en `--dry-run` contra el ERP | ⬜ Pendiente |
@@ -405,6 +405,32 @@ los mismos valores** que antes del cambio (comparación campo a campo contra la
 BD). Sobre `OP-AMX-EMIX-070826-0001` sacado por la vía Formulario (forzada a
 mano para la prueba), los 12 campos coinciden con los que ya están en la BD
 para ese mismo proyecto extraído por Detalle en la corrida del 18/08.
+
+### Resultado real (19/08/2026)
+
+Implementado en `scraper.py` (commit `3bc97b8`):
+
+- `MATERIAL_ID_OVERRIDES_FORMULARIO`: tabla con los 4 campos que cambian de
+  ID entre vistas (`precio_sw`, `precio_compra`, `orden_compra`/
+  `numero_factura` de suministros).
+- `_material_field_id()` gana el parámetro `vista` (`"detalle"` default |
+  `"formulario"`).
+- `_leer_valor_campo()`: lee `span`/`input`/`textarea`/`select` sin asumir
+  el tag; si el selector no resuelve, loguea warning y degrada ese campo a
+  `""` en vez de descartar el material entero por excepción (cambio de
+  comportamiento intencional respecto del código viejo, documentado en el
+  docstring de la función).
+- Bug de parseo encontrado en la Fase 2 corregido de paso: Formulario
+  envuelve código+descripción entre paréntesis, Detalle no — se recorta
+  simétrico solo cuando aparecen los dos.
+
+**Verificación offline** (sin tocar el ERP): los 13 casos reales observados
+en los volcados de la Fase 2 (item `13562`, suministro `13566`, ambas
+vistas) se corrieron contra `_material_field_id()` — los 13 resuelven al ID
+exacto visto en el HTML real. Suite completa: **60/60 passed**. Verificación
+en vivo contra el ERP (extracción real de un proyecto por la vía Formulario)
+queda para la Fase 6 (`--dry-run-formulario`), una vez que exista el
+fallback que la dispare.
 
 ---
 
