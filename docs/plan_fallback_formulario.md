@@ -18,7 +18,7 @@
 | 3 | Lector de campos agnóstico al tipo de elemento | ✅ Hecho |
 | 4 | Fallback en `extraer_materiales()` | ✅ Hecho |
 | 5 | Guardas anti-escritura | ✅ Hecho |
-| 6 | Validación en `--dry-run` contra el ERP | ⬜ Pendiente |
+| 6 | Validación en `--dry-run` contra el ERP | 🔄 Script listo, falta correrlo |
 | 7 | Pruebas automáticas | ⬜ Pendiente |
 | 8 | Documentación | ⬜ Pendiente |
 | 9 | Corrida real sobre los 2 proyectos rotos | ⬜ Pendiente |
@@ -536,6 +536,20 @@ completa: 60/60 passed.
 ## Fase 6 — Validación en `--dry-run` contra el ERP
 
 **Objetivo:** verificar los datos extraídos **antes** de que toquen la BD.
+
+### Desviación respecto del plan original (19/08/2026)
+
+En vez del flag `--dry-run-formulario` threadeado por todo el loop de
+`main.py` (tocaría el entrypoint de producción — checkpoints, lock,
+upsert_proyecto/upsert_item — solo para poder saltear el upsert de
+materiales), se optó por
+[`scripts/manual_exploration/validar_extraccion_formulario.py`](../scripts/manual_exploration/validar_extraccion_formulario.py):
+llama directo a `scraper.login()`/`scraper.extraer_materiales()` — las
+mismas funciones de producción, ejercitando el fallback real de la Fase 4 y
+el monitor de escrituras de la Fase 5 — sobre proyectos puntuales, sin
+importar `database.py` en ningún momento. Es un dry-run más fiel, no menos:
+mismo código exacto que corre en una corrida real, cero superficie nueva en
+el entrypoint de producción.
 
 Flag nuevo en `main.py`: `--dry-run-formulario`. Con él, el fallback extrae y
 **loguea** los materiales, pero **no llama a `upsert_material()`**.
