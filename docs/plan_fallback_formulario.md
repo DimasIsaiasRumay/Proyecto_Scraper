@@ -21,7 +21,7 @@
 | 6 | Validación en `--dry-run` contra el ERP | ✅ Hecho |
 | 7 | Pruebas automáticas | ✅ Hecho |
 | 8 | Documentación | ✅ Hecho |
-| 9 | Corrida real sobre los 2 proyectos rotos | ⬜ Pendiente |
+| 9 | Corrida real sobre los 2 proyectos rotos | ✅ Hecho |
 
 Marcadores: ⬜ Pendiente · 🔄 En curso · ✅ Hecho · ⏸️ Bloqueado
 
@@ -676,6 +676,30 @@ ese momento (punto 3 ya cubierto). Sin cambios de código; suite sin tocar,
 
 **Aceptación:** los 2 proyectos históricamente rotos quedan procesados, el ERP
 sin modificaciones, y la corrida completa sin fallos nuevos.
+
+### Resultado real (19/08/2026) — PLAN CERRADO
+
+Corrida completa real (ejecución ID **40**, forzada con `--force --sync`):
+22 proyectos pendientes, **413 materiales**, **0 fallidos**.
+
+- `OP-ING-EPLIQ-070826-0001`: agotó los 2 intentos de "Visualizar Detalle",
+  cayó al fallback, extrajo **15 items** sin error.
+- `OP_CLARO_Complemento COWRoja_2906261616`: mismo patrón, **11 items + 39
+  suministros** sin error — el proyecto que llevaba fallando desde el
+  30/06/2026 (~7 semanas) quedó procesado.
+- **Cero líneas `[ERROR]` en todo el log** — el monitor de escrituras de la
+  Fase 5 no detectó actividad inesperada en ninguno de los dos.
+- El log cierra con `Corrida completada exitosamente` (no
+  `completada con errores` — esa rama solo se loguea si
+  `proyectos_fallidos` no está vacío), confirmando **0 proyectos fallidos**.
+- `✅ Sincronización con Odoo completada exitosamente` al final.
+
+Verificación en UI del ERP: cubierta por la confirmación visual ya hecha en
+la Fase 6 sobre los mismos 2 proyectos (capturas completas, incluido el
+caso límite `MP_2133`) — no se repite acá porque el fallback en esta corrida
+es el mismo código ya validado, sin cambios entre una corrida y otra.
+
+**El plan queda cerrado: las 9 fases completas.**
 
 ---
 
